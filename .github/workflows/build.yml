@@ -28,12 +28,18 @@ jobs:
       - name: Build (build.bat, CommonLib at the pinned commit)
         working-directory: Crossfire
         shell: cmd
-        run: build.bat
+        # CommonLib auto-downloads a prebuilt library whenever GITHUB_ACTIONS is set, and that library is baked with
+        # VR on (Crossfire builds SE+AE only), so it refuses to link. Unset, CI builds CommonLib from source exactly as
+        # build.bat does on a PC. (An empty value still counts as set to xmake's os.getenv, so it must be removed.)
+        run: |
+          set GITHUB_ACTIONS=
+          build.bat
       - name: Warnings in the plugin's own files
         working-directory: Crossfire
         shell: pwsh
         run: |
           # touch the plugin's sources so only they recompile, verbosely; CommonLib's warnings are not ours
+          Remove-Item Env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
           Get-ChildItem src -File | ForEach-Object { $_.LastWriteTime = Get-Date }
           xmake -v 2>&1 | Tee-Object -FilePath build-verbose.log | Out-Null
           if ($LASTEXITCODE -ne 0) { Get-Content build-verbose.log -Tail 60; exit 1 }
