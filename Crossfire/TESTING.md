@@ -7,6 +7,11 @@
   against a brute-force search over 300 random worlds, every reaction and the symmetry of the contest over 20,000
   random cases, every way a settings line can be wrong, a round trip of every setting, and the shipped
   `Crossfire_Rules.ini` read back to exactly the built-in defaults. libFuzzer ran the parser half a million times.
+- `tests/fuzz_touch.cpp` (run by `tests/run.sh`): `FirstTouch` against a reference that shares none of its code (its own
+  distance functions, the frame sampled 4,000 times), over shapes from 0.1 to a million units, zero radii, still and
+  coincident bodies; and `Resolve` against its rules (an immune side is never destroyed or weakened, nothing grows,
+  nothing goes negative). 300,000 cases per compiler. Planting a bug in the search (the last touch instead of the
+  first, or a coarse search) makes it fail.
 - `../tools/wincheck/check.sh Crossfire --link`: every source compiled for Windows (the MSVC ABI) against CommonLib
   at the pinned commit, SE and AE, with CommonLib's own layout checks, then linked against all of CommonLib: no
   error, no warning in the plugin's files, no game or plugin function used but defined nowhere. The same check

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds and runs Crossfire's core tests natively (Linux or WSL), with the address and undefined-behaviour sanitizers,
-# under both g++ and clang++ where present, and an optimised build for the timing. `--fuzz N` also fuzzes the settings
+# under both g++ and clang++ where present, and an optimised build for the timing; then tests/fuzz_touch.cpp checks
+# the collision search against a reference that shares none of its code. `--fuzz N` also fuzzes the settings
 # parser for N seconds (needs clang's libFuzzer).
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -17,6 +18,9 @@ for cxx in g++ clang++; do
 	echo "== $cxx, optimised"
 	"$cxx" "${warn[@]}" -O2 -DNDEBUG "${src[@]}" -o "$out/test-$cxx-opt"
 	"$out/test-$cxx-opt" || status=1
+	echo "== $cxx, collision search against an independent reference"
+	"$cxx" "${warn[@]}" -g -O2 -fsanitize=address,undefined -fno-sanitize-recover=all "$here/fuzz_touch.cpp" "$here/../src/Core.cpp" -o "$out/touch-$cxx"
+	"$out/touch-$cxx" 300000 || status=1
 done
 if [[ "${1:-}" == "--fuzz" ]]; then
 	secs="${2:-60}"

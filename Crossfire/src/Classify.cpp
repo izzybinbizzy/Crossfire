@@ -24,6 +24,7 @@ namespace Crossfire
 			const void* spell;
 			const void* effect;
 			const void* ammo;
+			const void* weapon;  // the bow or crossbow: [Exclude] can name one, so two bows sharing an arrow may differ
 			const void* enchantment;
 			bool        operator==(const Key&) const = default;
 		};
@@ -33,7 +34,7 @@ namespace Crossfire
 			[[nodiscard]] std::size_t operator()(const Key& a_key) const noexcept
 			{
 				std::size_t h = 0;
-				for (const void* p : { a_key.base, a_key.spell, a_key.effect, a_key.ammo, a_key.enchantment }) {
+				for (const void* p : { a_key.base, a_key.spell, a_key.effect, a_key.ammo, a_key.weapon, a_key.enchantment }) {
 					h ^= std::hash<const void*>{}(p) + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
 				}
 				return h;
@@ -200,7 +201,7 @@ namespace Crossfire
 		if (a_projectile->GetFormType() == RE::FormType::ProjectileArrow) {
 			enchantment = static_cast<RE::ArrowProjectile*>(a_projectile)->GetArrowRuntimeData().enchantItem;
 		}
-		const Key key{ a_base, spell, effect, rd.ammoSource, enchantment };
+		const Key key{ a_base, spell, effect, rd.ammoSource, rd.weaponSource, enchantment };
 		if (const auto it = gCache.find(key); it != gCache.end()) {
 			return it->second;
 		}

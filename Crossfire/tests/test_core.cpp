@@ -214,18 +214,25 @@ namespace
 		const float                           kind = unit(g);
 		const Vec3                            p{ pos(g), pos(g), pos(g) * 0.2f };
 		if (kind < 0.75f) {
-			Body b = Sphere(id, p, p + Vec3{ step(g), step(g), step(g) * 0.3f }, rad(g), static_cast<Element>(id % kElements), 1.0f + unit(g) * 100.0f,
+			// every draw in its own statement: a function's arguments are evaluated in no fixed order, and each compiler
+			// (g++, clang, MSVC) must test the same worlds
+			const Vec3  move{ step(g), step(g), step(g) * 0.3f };
+			const float r = rad(g), strength = 1.0f + unit(g) * 100.0f;
+			Body        b = Sphere(id, p, p + move, r, static_cast<Element>(id % kElements), strength,
 				1 + id % 7);
 			b.immune = unit(g) < 0.1f;  // a cone
 			return b;
 		}
 		if (kind < 0.9f) {
-			Body b = Beam(id, p, p + Vec3{ step(g) * 3, step(g) * 3, step(g) }, rad(g) * 0.2f);
+			const Vec3  reach{ step(g) * 3, step(g) * 3, step(g) };
+			const float r = rad(g) * 0.2f;
+			Body        b = Beam(id, p, p + reach, r);
 			b.shooter = 1 + id % 7;
 			return b;
 		}
 		const float angle = unit(g) * 2 * kPi;
-		Body        b = Wall(id, p, { std::cos(angle), std::sin(angle), 0 }, 20 + rad(g) * 5, 50 + rad(g) * 5, rad(g) * 0.1f);
+		const float w = 20 + rad(g) * 5, h = 50 + rad(g) * 5, r = rad(g) * 0.1f;
+		Body        b = Wall(id, p, { std::cos(angle), std::sin(angle), 0 }, w, h, r);
 		b.shooter = 1 + id % 7;
 		return b;
 	}
@@ -411,7 +418,9 @@ namespace
 		for (int i = 0; i < 20000; ++i) {
 			Table r = DefaultTable();
 			for (int k = 0; k < 6; ++k) {
-				SetReaction(r, static_cast<Element>(el(g)), static_cast<Element>(el(g)), static_cast<Action>(act(g)));
+				const auto e1 = static_cast<Element>(el(g)), e2 = static_cast<Element>(el(g));
+				const auto a = static_cast<Action>(act(g));
+				SetReaction(r, e1, e2, a);
 			}
 			const Element ea = static_cast<Element>(el(g)), eb = static_cast<Element>(el(g));
 			const float   sa = s(g), sb = s(g), ratio = 1.0f + s(g) / 50.0f;

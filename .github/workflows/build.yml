@@ -1,0 +1,80 @@
+# Crossfire CI: the core tests (sanitizers, both compilers, fuzzers) on Linux, and the real DLL built with MSVC on
+# Windows, checked from outside and packaged as the mod-manager zip (downloadable from the run's Artifacts).
+name: build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compilers and sanitizer runtimes
+        run: sudo apt-get update -q && sudo apt-get install -y -q clang libclang-rt-18-dev
+      - name: Core tests, collision reference, settings fuzzer (300 s)
+        working-directory: Crossfire
+        run: bash tests/run.sh --fuzz 300
+
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build (build.bat, CommonLib at the pinned commit)
+        working-directory: Crossfire
+        shell: cmd
+        run: build.bat
+      - name: Warnings in the plugin's own files
+        working-directory: Crossfire
+        shell: pwsh
+        run: |
+          # touch the plugin's sources so only they recompile, verbosely; CommonLib's warnings are not ours
+          Get-ChildItem src -File | ForEach-Object { $_.LastWriteTime = Get-Date }
+          xmake -v 2>&1 | Tee-Object -FilePath build-verbose.log | Out-Null
+          if ($LASTEXITCODE -ne 0) { Get-Content build-verbose.log -Tail 60; exit 1 }
+          $mine = Select-String -Path build-verbose.log -Pattern 'warning' |
+            Where-Object { $_.Line -match '[\\/]src[\\/]' -and $_.Line -notmatch 'SKSEMenuFramework' -and $_.Line -notmatch 'commonlib' }
+          $mine | ForEach-Object { $_.Line } | Set-Content warnings.txt
+          "### MSVC warnings in Crossfire's own files: $(@($mine).Count)" >> $env:GITHUB_STEP_SUMMARY
+          $mine | Select-Object -First 40 | ForEach-Object { "    $($_.Line)" } >> $env:GITHUB_STEP_SUMMARY
+      - name: Check the DLL from outside and package
+        working-directory: Crossfire
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem build -Recurse -Filter Crossfire.dll | Select-Object -First 1
+          if (-not $dll) { throw "Crossfire.dll was not built" }
+          $pdb = Join-Path $dll.DirectoryName 'Crossfire.pdb'
+          # an SKSE plugin must export these, and with the static runtime (/MT) must not need the Visual C++ DLLs
+          $exports = dumpbin /nologo /exports $dll.FullName | Out-String
+          foreach ($name in 'SKSEPlugin_Load', 'SKSEPlugin_Version') {
+            if ($exports -notmatch $name) { throw "Crossfire.dll does not export $name" }
+          }
+          $deps = dumpbin /nologo /dependents $dll.FullName | Out-String
+          if ($deps -match '(?i)(msvcp140|vcruntime140)\.dll') { throw "Crossfire.dll needs the Visual C++ runtime DLLs (expected /MT): $deps" }
+          $stage = 'package/SKSE/Plugins'
+          New-Item -ItemType Directory -Force "$stage/Crossfire" | Out-Null
+          Copy-Item $dll.FullName $stage
+          if (Test-Path $pdb) { Copy-Item $pdb $stage }
+          Copy-Item data/SKSE/Plugins/Crossfire_Rules.ini $stage
+          Copy-Item data/SKSE/Plugins/Crossfire/README.txt "$stage/Crossfire"
+          Compress-Archive -Path package/SKSE -DestinationPath Crossfire.zip -Force
+          # read the zip back: exactly the files the mod needs, and never Crossfire.ini (the menu writes that)
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $entries = [IO.Compression.ZipFile]::OpenRead((Resolve-Path Crossfire.zip)).Entries | ForEach-Object { $_.FullName -replace '\\', '/' }
+          foreach ($need in 'SKSE/Plugins/Crossfire.dll', 'SKSE/Plugins/Crossfire_Rules.ini', 'SKSE/Plugins/Crossfire/README.txt') {
+            if ($entries -notcontains $need) { throw "Crossfire.zip is missing $need (has: $($entries -join ', '))" }
+          }
+          if ($entries -match 'Crossfire\.ini$') { throw "Crossfire.zip ships Crossfire.ini" }
+          "### Crossfire.zip`n$(($entries | ForEach-Object { "    $_" }) -join "`n")`n`nDLL: $([math]::Round($dll.Length / 1KB)) KB, exports SKSEPlugin_Load and SKSEPlugin_Version, static runtime" >> $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Crossfire
+          path: |
+            Crossfire/Crossfire.zip
+            Crossfire/warnings.txt
+            Crossfire/build-verbose.log
