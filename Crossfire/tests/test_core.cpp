@@ -809,8 +809,20 @@ namespace
 	}
 }
 
+// a file name is read as UTF-8 text, whatever its letters (path::string() would throw on Windows for one the ANSI
+// code page cannot show, and settings are read while the game loads)
+static void TestPathText()
+{
+	const std::filesystem::path p(std::u8string(u8"Data/SKSE/Plugins/Crossfire/\u9b54\u6cd5 patch.ini"));
+	CHECK(PathText(p.filename()) == "\xE9\xAD\x94\xE6\xB3\x95 patch.ini");
+	CHECK(PathText(p.extension()) == ".ini");
+	CHECK(PathText(std::filesystem::path("Crossfire_Rules.ini")) == "Crossfire_Rules.ini");
+	CHECK(PathText(std::filesystem::path()).empty());
+}
+
 int main()
 {
+	TestPathText();
 	TestVectors();
 	TestSphereSphere();
 	TestSphereBeam();

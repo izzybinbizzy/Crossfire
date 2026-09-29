@@ -15,6 +15,12 @@
 
 namespace Crossfire::Core
 {
+	std::string PathText(const std::filesystem::path& a_path)
+	{
+		const auto u = a_path.generic_u8string();
+		return std::string(u.begin(), u.end());
+	}
+
 	// ------------------------------------------------------------------ vectors
 	float Length(Vec3 a) noexcept { return std::sqrt(Dot(a, a)); }
 

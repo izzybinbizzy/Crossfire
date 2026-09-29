@@ -54,8 +54,12 @@ namespace Crossfire
 			}
 			std::vector<std::string> warnings;
 			Core::ParseIni(text, a_config, warnings);
-			const auto name = a_path.filename().string();
-			a_notes.push_back("read " + name + (warnings.empty() ? "" : " (" + std::to_string(warnings.size()) + " warning(s))"));
+			const auto name = Core::PathText(a_path.filename());
+			std::string note = "read " + name;
+			if (!warnings.empty()) {
+				note += std::format(" ({} warning(s))", warnings.size());
+			}
+			a_notes.push_back(std::move(note));
 			for (const auto& w : warnings) {
 				SKSE::log::warn("{}: {}", name, w);
 				a_notes.push_back("  " + name + ", " + w);
@@ -71,14 +75,14 @@ namespace Crossfire
 				return out;
 			}
 			for (std::filesystem::directory_iterator it(kPatches, ec), end; !ec && it != end; it.increment(ec)) {
-				auto ext = it->path().extension().string();
+				auto ext = Core::PathText(it->path().extension());
 				std::ranges::transform(ext, ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 				if (ext == ".ini" && it->is_regular_file(ec)) {
 					out.push_back(it->path());
 				}
 			}
 			std::ranges::sort(out, [](const auto& a, const auto& b) {
-				auto x = a.filename().string(), y = b.filename().string();
+				auto x = Core::PathText(a.filename()), y = Core::PathText(b.filename());
 				std::ranges::transform(x, x.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 				std::ranges::transform(y, y.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 				return x < y;
@@ -127,12 +131,12 @@ namespace Crossfire
 			{
 				std::ofstream out(temp, std::ios::binary | std::ios::trunc);
 				if (!out) {
-					SKSE::log::warn("settings: {} could not be written", temp.string());
+					SKSE::log::warn("settings: {} could not be written", Core::PathText(temp));
 					return;
 				}
 				out << Core::WriteSettings(a_config);
 				if (!out.flush()) {
-					SKSE::log::warn("settings: {} could not be written", temp.string());
+					SKSE::log::warn("settings: {} could not be written", Core::PathText(temp));
 					return;
 				}
 			}
@@ -140,7 +144,7 @@ namespace Crossfire
 			std::error_code ec;
 			std::filesystem::rename(temp, path, ec);
 			if (ec) {
-				SKSE::log::warn("settings: {} could not be replaced ({})", path.string(), ec.message());
+				SKSE::log::warn("settings: {} could not be replaced ({})", kSettings, ec.message());
 				std::filesystem::remove(temp, ec);
 			}
 		}

@@ -1,0 +1,2 @@
+# shell scripts run under bash (CI, WSL): LF on every checkout, whatever core.autocrlf says
+*.sh text eol=lf

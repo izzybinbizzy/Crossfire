@@ -12,6 +12,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <span>
 #include <string>
 #include <string_view>
@@ -40,6 +41,10 @@ namespace Crossfire::Core
 	// the direction a reference faces from its rotation (radians): x is pitch, positive looking down; z is heading,
 	// clockwise from north (+y). Heading 0 pitch 0 is (0, 1, 0).
 	[[nodiscard]] Vec3 DirectionFromAngles(float a_pitch, float a_heading) noexcept;
+
+	// A path as UTF-8 text. path::string() converts to the ANSI code page on Windows and throws for a name that code page
+	// cannot show (a Japanese file name on a Western system); this cannot.
+	[[nodiscard]] std::string PathText(const std::filesystem::path& a_path);
 
 	// distance from a point to the segment a-b (a == b is a point)
 	[[nodiscard]] float DistancePointSegment(Vec3 p, Vec3 a, Vec3 b) noexcept;
