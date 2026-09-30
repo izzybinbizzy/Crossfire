@@ -35,6 +35,20 @@ namespace CrossfireAPI
 		std::uint32_t projectileA{ 0 }, projectileB{ 0 };  // form IDs of the projectile records (BGSProjectile)
 	};
 
+	// a spell struggle (two streams locked together) began or ended; Papyrus gets "Crossfire_Struggle" (see README.md)
+	inline constexpr std::uint32_t kStruggle = 'CFST';
+
+	struct Struggle
+	{
+		std::uint32_t version{ 1 };
+		std::uint8_t  event{ 0 };  // 0 began, 1 overwhelmed, 2 gave way, 3 draw, 4 ended quietly
+		std::uint8_t  elementA{ 0 }, elementB{ 0 };
+		std::uint8_t  winner{ 0 };  // 0 none, 1 A, 2 B
+		float         x{ 0 }, y{ 0 }, z{ 0 };  // the meeting point
+		float         balance{ 0 };            // -1 A's hands .. +1 B's hands
+		std::uint32_t shooterA{ 0 }, shooterB{ 0 };  // form IDs
+	};
+
 	inline constexpr std::uint8_t kDestroyedA = 1 << 0;
 	inline constexpr std::uint8_t kDestroyedB = 1 << 1;
 	inline constexpr std::uint8_t kWeakenedA = 1 << 2;

@@ -605,6 +605,571 @@ namespace Crossfire::Core
 		return true;
 	}
 
+	// ------------------------------------------------------------------ spell struggles
+	namespace
+	{
+		constexpr StruggleConfig kStruggleDefaults{};
+
+		constexpr float kMaxSkill = 300.0f;
+		constexpr float kMaxLevel = 300.0f;
+		constexpr float kMaxCost = 1.0e5f;
+		constexpr float kMinMult = 0.01f, kMaxMult = 100.0f;
+		constexpr float kMaxStep = 0.25f;     // the longest frame Advance takes, as Clash.cpp caps it
+		constexpr float kNever = 1.0e6f;      // SecondsToWin when it never comes
+		constexpr float kNowhere = std::numeric_limits<float>::max();  // how far off the axis a point that is not finite is
+		constexpr float kWorld = 1.0e7f;      // well beyond any worldspace, as in Valid()
+		constexpr float kTubeBack = 100.0f;   // the tube starts this far behind a muzzle and ends this far beyond the other
+		constexpr float kTubeWidth = 150.0f;  // off the axis at the muzzle ...
+		constexpr float kTubeSpread = 0.35f;  // ... and this much more per unit along it: a spray fans out
+		constexpr float kReachFallback = 800.0f, kReachMin = 150.0f, kReachMax = 6000.0f;
+		constexpr float kReachSlack = 1.15f, kReachExtra = 100.0f;  // InReach: a little past both reaches, as aim wavers
+		constexpr float kMinShare = 0.15f, kMaxShare = 0.85f;
+		constexpr float kReachUsed = 0.95f;  // the front goes no further than this share of a stream's reach
+		constexpr float kBeamPast = 16.0f, kBeamMin = 32.0f;
+		constexpr float kBeamAligned = 0.2f;  // a beam more off the axis than this cosine (about 78 degrees) is not cut
+		constexpr float kShakeFade = 3000.0f;
+		constexpr float kMaxResist = 85.0f;
+		constexpr float kMaxMagnitude = 1.0e6f;
+
+		// a setting as its math uses it: within the range the menu gives it, its default when it is not a number
+		[[nodiscard]] float Clamped(float a_value, float a_default, float a_lo, float a_hi) noexcept
+		{
+			return std::clamp(Sanitize(a_value, a_default), a_lo, a_hi);
+		}
+
+		[[nodiscard]] float SkillOf(const Caster& a_caster) noexcept { return std::clamp(Sanitize(a_caster.skill, 0.0f), 0.0f, kMaxSkill); }
+
+		[[nodiscard]] bool OnMap(Vec3 a) noexcept
+		{
+			return Finite(a) && std::abs(a.x) <= kWorld && std::abs(a.y) <= kWorld && std::abs(a.z) <= kWorld;
+		}
+
+		[[nodiscard]] float WithinOne(float a_value) noexcept { return std::isfinite(a_value) ? std::clamp(a_value, -1.0f, 1.0f) : 0.0f; }
+
+		[[nodiscard]] float SafeRadius(float a_radius) noexcept { return std::isfinite(a_radius) ? std::max(a_radius, 0.0f) : 0.0f; }
+
+		// how far off the axis the tube reaches this far along it, for a projectile this big
+		[[nodiscard]] float TubeAt(float a_along, float a_radius) noexcept
+		{
+			return kTubeWidth + kTubeSpread * std::max(a_along, 0.0f) + a_radius;
+		}
+
+		[[nodiscard]] float PushTime(const StruggleConfig& a_config) noexcept
+		{
+			return Clamped(a_config.pushTime, kStruggleDefaults.pushTime, 1.0f, 30.0f);
+		}
+
+		[[nodiscard]] float BreakTime(const StruggleConfig& a_config) noexcept
+		{
+			return Clamped(a_config.breakTime, kStruggleDefaults.breakTime, 0.0f, 5.0f);
+		}
+
+		// an ending: an overwhelm leaves the loser reeling, anything else cools down
+		void End(Struggle& a_s, StruggleStep& a_step, StruggleEvent a_event, bool a_aWon, const StruggleConfig& a_config) noexcept
+		{
+			a_step.event = a_event;
+			a_step.aWon = a_s.aWon = a_aWon;
+			a_s.phase = a_event == StruggleEvent::kOverwhelmed && BreakTime(a_config) > 0.0f ? Phase::kBroken : Phase::kCooldown;
+			a_s.timer = 0.0f;
+		}
+	}
+
+	Stream StreamOf(Kind a_kind, bool a_concentration, bool a_voice) noexcept
+	{
+		if (a_kind == Kind::kStream) {
+			return a_voice ? Stream::kBreath : Stream::kSpray;
+		}
+		// a one-shot bolt is gone before a lock could show
+		return a_kind == Kind::kBeam && a_concentration ? Stream::kBeam : Stream::kNone;
+	}
+
+	bool StreamOn(Stream a_stream, const StruggleConfig& a_config) noexcept
+	{
+		switch (a_stream) {
+		case Stream::kSpray:
+			return a_config.sprays;
+		case Stream::kBeam:
+			return a_config.beams;
+		case Stream::kBreath:
+			return a_config.breath;
+		case Stream::kNone:
+			break;
+		}
+		return false;
+	}
+
+	bool MayLock(const LockSide& a, const LockSide& b, Action a_action, const StruggleConfig& a_config) noexcept
+	{
+		const auto ready = [&](const LockSide& s) { return s.actor && s.alive && !s.busy && StreamOn(s.stream, a_config); };
+		const auto creature = [](const LockSide& s) { return s.actor && !s.npc && !s.dragon && !s.player; };
+		if (!a_config.enabled || !ready(a) || !ready(b)) {
+			return false;
+		}
+		if (a_action != Action::kClash && !(a_action == Action::kAnnihilate && a_config.opposites)) {
+			return false;  // the rules say this pair passes, or one simply wins: there is nothing to push against
+		}
+		if (!a.player && !b.player && !a_config.betweenOthers) {
+			return false;
+		}
+		return a_config.creatures || (!creature(a) && !creature(b));
+	}
+
+	bool Facing(Vec3 a_muzzleA, Vec3 a_aimA, Vec3 a_muzzleB, Vec3 a_aimB) noexcept
+	{
+		if (!OnMap(a_muzzleA) || !OnMap(a_muzzleB) || !Finite(a_aimA) || !Finite(a_aimB)) {
+			return false;
+		}
+		const Vec3  ab = a_muzzleB - a_muzzleA;
+		const float gap = Length(ab);
+		if (!(gap >= kMinGap)) {
+			return false;
+		}
+		const auto aims = [&](Vec3 a_aim, Vec3 a_toOther) {
+			const float n = Length(a_aim);
+			return std::isfinite(n) && n > 1e-6f && Dot(a_aim, a_toOther) >= kFacingCos * n * gap;
+		};
+		return aims(a_aimA, ab) && aims(a_aimB, a_muzzleA - a_muzzleB);
+	}
+
+	float PickSkill(std::span<const float, 5> a_schools, int a_own, int a_source) noexcept
+	{
+		std::array<float, 5> s{};
+		float                best = 0.0f, sum = 0.0f;
+		for (std::size_t i = 0; i < s.size(); ++i) {
+			s[i] = std::clamp(Sanitize(a_schools[i], 0.0f), 0.0f, kMaxSkill);
+			best = std::max(best, s[i]);
+			sum += s[i];
+		}
+		if (a_source == 2) {
+			return sum / static_cast<float>(s.size());
+		}
+		if (a_source == 1 || a_own < 0 || a_own >= static_cast<int>(s.size())) {
+			return best;  // a spell of no school counts the caster's best
+		}
+		return s[static_cast<std::size_t>(a_own)];
+	}
+
+	float MagicSkill(float a_picked, float a_level, bool a_creature, bool a_breath) noexcept
+	{
+		const float byLevel = std::min(std::clamp(Sanitize(a_level, 1.0f), 1.0f, kMaxLevel), 100.0f);
+		if (a_breath) {
+			return byLevel;
+		}
+		const float skill = std::clamp(Sanitize(a_picked, 0.0f), 0.0f, kMaxSkill);
+		return a_creature ? std::max(skill, byLevel) : skill;
+	}
+
+	float PowerMult(bool a_opposesPlayer, bool a_dragon, int a_words, const StruggleConfig& a_config) noexcept
+	{
+		float m = 1.0f;
+		if (a_opposesPlayer) {
+			m *= Clamped(a_config.enemyPower, kStruggleDefaults.enemyPower, 0.25f, 4.0f);
+		}
+		if (a_dragon) {
+			m *= Clamped(a_config.dragonPower, kStruggleDefaults.dragonPower, 0.25f, 4.0f);
+		}
+		if (a_words > 0) {
+			m *= 1.0f + Clamped(a_config.wordBonus, kStruggleDefaults.wordBonus, 0.0f, 1.0f) * static_cast<float>(std::min(a_words, 3) - 1);
+		}
+		return m;
+	}
+
+	float LogPower(const Caster& a_caster, const StruggleConfig& a_config) noexcept
+	{
+		const auto& d = kStruggleDefaults;
+		const float level = std::clamp(Sanitize(a_caster.level, 1.0f), 1.0f, kMaxLevel);
+		const float cost = std::clamp(Sanitize(a_caster.cost, 1.0f), 1.0f, kMaxCost);
+		const float magicka = a_caster.paysMagicka ? std::clamp(Sanitize(a_caster.magicka, 1.0f), 0.0f, 1.0f) : 1.0f;
+		const float mult = std::clamp(Sanitize(a_caster.mult, 1.0f), kMinMult, kMaxMult);
+		float       p = kSkillPoint * Clamped(a_config.skillWeight, d.skillWeight, 0.0f, 3.0f) * SkillOf(a_caster);
+		p += kLevelPoint * Clamped(a_config.levelWeight, d.levelWeight, 0.0f, 3.0f) * level;
+		p += Clamped(a_config.spellWeight, d.spellWeight, 0.0f, 2.0f) * std::log(cost);
+		// an empty caster keeps a quarter of its push (at weight 1): a lock is not lost the instant the magicka runs out
+		p += Clamped(a_config.magickaWeight, d.magickaWeight, 0.0f, 2.0f) * std::log(0.25f + 0.75f * magicka);
+		if (a_caster.dual) {
+			p += std::log(Clamped(a_config.dualBonus, d.dualBonus, 1.0f, 3.0f));
+		}
+		return p + std::log(mult);
+	}
+
+	float Advantage(const Caster& a, const Caster& b, const StruggleConfig& a_config, bool a_surgeA, bool a_surgeB) noexcept
+	{
+		const float surge = std::log(Clamped(a_config.surgePower, kStruggleDefaults.surgePower, 1.0f, 3.0f));
+		const float d = (LogPower(a, a_config) + (a_surgeA ? surge : 0.0f)) - (LogPower(b, a_config) + (a_surgeB ? surge : 0.0f));
+		// tanh(d / 2) is (Pa - Pb) / (Pa + Pb); taken on |d| so B over A is exactly the negative, whatever the maths library
+		float lead = std::isnan(d) ? 0.0f : d >= 0.0f ? std::tanh(0.5f * d) : -std::tanh(-0.5f * d);
+		if (a_config.skillAlwaysWins && a.school && b.school) {
+			const float sa = SkillOf(a), sb = SkillOf(b);
+			if (std::abs(sa - sb) >= 1.0f) {
+				const float s = sa > sb ? 1.0f : -1.0f;
+				lead = s * std::max(s * lead, kMinLead);
+			}
+		}
+		return std::clamp(lead, -1.0f, 1.0f);
+	}
+
+	float PushRate(const StruggleConfig& a_config) noexcept { return 3.0f / PushTime(a_config); }
+
+	float SecondsToWin(float a_lead, float a_pace, const StruggleConfig& a_config) noexcept
+	{
+		const float rate = PushRate(a_config) * std::abs(WithinOne(a_lead)) * (std::isfinite(a_pace) ? std::max(a_pace, 0.0f) : 1.0f);
+		return rate > 0.0f ? std::min(kLockIn + 1.0f / rate, kNever) : kNever;
+	}
+
+	float MagickaDrain(float a_towardMe, float a_cost, float a_dt, const StruggleConfig& a_config) noexcept
+	{
+		const float toward = std::isfinite(a_towardMe) ? std::clamp(a_towardMe, 0.0f, 1.0f) : 0.0f;
+		const float cost = std::isfinite(a_cost) ? std::clamp(a_cost, 0.0f, kMaxCost) : 0.0f;
+		const float dt = std::isfinite(a_dt) ? std::clamp(a_dt, 0.0f, kMaxStep) : 0.0f;
+		return Clamped(a_config.magickaPressure, kStruggleDefaults.magickaPressure, 0.0f, 3.0f) * cost * toward * dt;
+	}
+
+	Struggle Begin(std::uint32_t a_shooterA, std::uint32_t a_shooterB, Action a_reaction, Vec3 a_meet, Vec3 a_muzzleA, Vec3 a_muzzleB,
+		float a_reachA, float a_reachB, bool a_bothBeams, bool a_breath, bool a_dragon, std::uint64_t a_seed, const StruggleConfig& a_config) noexcept
+	{
+		if (a_shooterB < a_shooterA) {
+			std::swap(a_shooterA, a_shooterB);
+			std::swap(a_muzzleA, a_muzzleB);
+			std::swap(a_reachA, a_reachB);
+			a_reaction = Mirror(a_reaction);
+		}
+		Struggle s;
+		s.a = a_shooterA;
+		s.b = a_shooterB;
+		s.reaction = a_reaction;
+		s.breath = a_breath;
+		s.dragon = a_dragon;
+		s.seed = a_seed;
+		// two beams touch wherever they cross, which says nothing about who reached further
+		s.startShare = a_bothBeams ? 0.5f : StartShare(a_meet, a_muzzleA, a_muzzleB);
+		Place(s, a_muzzleA, a_muzzleB, a_reachA, a_reachB);
+		s.phase = Roll(a_seed, a_dragon ? a_config.dragonChance : a_config.chance) ? Phase::kLocked : Phase::kDeclined;
+		return s;
+	}
+
+	void Place(Struggle& a_struggle, Vec3 a_muzzleA, Vec3 a_muzzleB, float a_reachA, float a_reachB) noexcept
+	{
+		if (!OnMap(a_muzzleA) || !OnMap(a_muzzleB) || !std::isfinite(a_reachA) || !std::isfinite(a_reachB) ||
+			!(Length(a_muzzleB - a_muzzleA) >= 1.0f)) {
+			return;
+		}
+		a_struggle.muzzleA = a_muzzleA;
+		a_struggle.muzzleB = a_muzzleB;
+		a_struggle.reachA = std::clamp(a_reachA, 0.0f, kWorld);
+		a_struggle.reachB = std::clamp(a_reachB, 0.0f, kWorld);
+		a_struggle.placed = true;
+	}
+
+	StruggleStep Advance(Struggle& a_s, const Caster& a, const Caster& b, const Sight& a_sight, float a_dt, const StruggleConfig& a_config) noexcept
+	{
+		const float dt = std::isfinite(a_dt) && a_dt > 0.0f ? std::min(a_dt, kMaxStep) : 0.0f;
+		// only Begin and Advance write a struggle, but nothing that is not a number may stick
+		a_s.balance = WithinOne(a_s.balance);
+		for (float* f : { &a_s.age, &a_s.quietA, &a_s.quietB, &a_s.timer, &a_s.surgeA, &a_s.surgeB }) {
+			*f = std::isfinite(*f) ? std::clamp(*f, 0.0f, kNever) : 0.0f;
+		}
+		a_s.nextSpark = std::isfinite(a_s.nextSpark) ? std::clamp(a_s.nextSpark, 0.0f, kSparkEvery) : kSparkEvery;
+		a_s.lead = WithinOne(a_s.lead);
+
+		StruggleStep step;
+		step.lead = a_s.lead;
+		step.aWon = a_s.aWon;
+		switch (a_s.phase) {
+		case Phase::kBroken:
+			a_s.timer += dt;
+			if (a_s.timer >= BreakTime(a_config)) {
+				a_s.phase = Phase::kCooldown;
+				a_s.timer = 0.0f;
+			}
+			return step;
+		case Phase::kCooldown:
+			a_s.timer += dt;
+			if (a_s.timer >= kCooldownTime) {
+				step.event = StruggleEvent::kGone;
+			}
+			return step;
+		case Phase::kDeclined:
+			a_s.quietA = a_sight.seenA ? 0.0f : a_s.quietA + dt;
+			a_s.quietB = a_sight.seenB ? 0.0f : a_s.quietB + dt;
+			if (a_s.quietA >= kGrace || a_s.quietB >= kGrace) {
+				step.event = StruggleEvent::kGone;
+			}
+			return step;
+		case Phase::kLocked:
+			break;
+		}
+		if (a_s.phase != Phase::kLocked) {
+			step.event = StruggleEvent::kGone;  // not a phase at all
+			return step;
+		}
+
+		if (!a_sight.valid) {
+			End(a_s, step, StruggleEvent::kCalledOff, false, a_config);
+			return step;
+		}
+		a_s.age += dt;
+		a_s.quietA = a_sight.seenA ? 0.0f : a_s.quietA + dt;
+		a_s.quietB = a_sight.seenB ? 0.0f : a_s.quietB + dt;
+		const bool both = a_sight.seenA && a_sight.seenB;
+
+		// a side pushed most of the way back surges, once
+		a_s.surgeA = std::max(a_s.surgeA - dt, 0.0f);
+		a_s.surgeB = std::max(a_s.surgeB - dt, 0.0f);
+		if (a_config.surge) {
+			if (!a_s.surgedA && a_s.balance <= -kSurgeAt) {
+				a_s.surgedA = step.surgeA = true;
+				a_s.surgeA = kSurgeTime;
+			}
+			if (!a_s.surgedB && a_s.balance >= kSurgeAt) {
+				a_s.surgedB = step.surgeB = true;
+				a_s.surgeB = kSurgeTime;
+			}
+		}
+
+		a_s.lead = step.lead = Advantage(a, b, a_config, a_config.surge && a_s.surgeA > 0.0f, a_config.surge && a_s.surgeB > 0.0f);
+		// one side unseen for a moment (a gap in its spray): the lock holds where it is
+		if (both) {
+			// the lock holds where the streams met for kLockIn; only the part of this step after that pushes
+			const float pushing = std::clamp(a_s.age - kLockIn, 0.0f, dt);
+			const float pace = a_s.breath ? kBreathPace : 1.0f;
+			a_s.balance = std::clamp(a_s.balance + PushRate(a_config) * a_s.lead * pace * pushing, -1.0f, 1.0f);
+			step.drainA = a.paysMagicka ? MagickaDrain(-a_s.balance, a.cost, dt, a_config) : 0.0f;
+			step.drainB = b.paysMagicka ? MagickaDrain(a_s.balance, b.cost, dt, a_config) : 0.0f;
+			a_s.nextSpark -= dt;
+			if (a_s.nextSpark <= 0.0f) {
+				step.spark = true;
+				a_s.nextSpark += kSparkEvery;
+			}
+		}
+
+		const float maxTime = Clamped(a_config.maxTime, kStruggleDefaults.maxTime, 0.0f, 60.0f);
+		if (std::abs(a_s.balance) >= 1.0f) {
+			End(a_s, step, StruggleEvent::kOverwhelmed, a_s.balance > 0.0f, a_config);
+		} else if (a_s.quietA >= kGrace && a_s.quietB >= kGrace) {
+			End(a_s, step, StruggleEvent::kReleased, false, a_config);
+		} else if (a_s.quietA >= kGrace) {
+			// stopping while being pushed back is losing: it ran dry, or let go rather than be overwhelmed
+			End(a_s, step, -a_s.balance >= kOutlast ? StruggleEvent::kOverwhelmed : StruggleEvent::kGaveWay, false, a_config);
+		} else if (a_s.quietB >= kGrace) {
+			End(a_s, step, a_s.balance >= kOutlast ? StruggleEvent::kOverwhelmed : StruggleEvent::kGaveWay, true, a_config);
+		} else if (maxTime > 0.0f && a_s.age >= maxTime) {
+			if (std::abs(a_s.balance) > kDrawBand) {
+				End(a_s, step, StruggleEvent::kOverwhelmed, a_s.balance > 0.0f, a_config);
+			} else {
+				End(a_s, step, StruggleEvent::kDraw, false, a_config);
+			}
+		}
+		return step;
+	}
+
+	AxisPoint Project(Vec3 p, Vec3 a_from, Vec3 a_to) noexcept
+	{
+		if (!OnMap(p) || !OnMap(a_from) || !OnMap(a_to)) {
+			return { 0.0f, kNowhere };
+		}
+		const Vec3  axis = a_to - a_from, d = p - a_from;
+		const float len = Length(axis);
+		if (len < 1e-6f) {
+			return { 0.0f, Length(d) };
+		}
+		const Vec3  u = axis * (1.0f / len);
+		const float along = Dot(d, u);
+		return { along, Length(d - u * along) };
+	}
+
+	bool InCorridor(AxisPoint a_point, float a_length, float a_radius) noexcept
+	{
+		if (!std::isfinite(a_point.along) || !std::isfinite(a_point.off) || !std::isfinite(a_length)) {
+			return false;
+		}
+		return a_point.along >= -kTubeBack && a_point.along <= a_length + kTubeBack && a_point.off <= TubeAt(a_point.along, SafeRadius(a_radius));
+	}
+
+	bool BeamAims(Vec3 a_from, Vec3 a_dir, Vec3 a_target, float a_radius) noexcept
+	{
+		const float n = Length(a_dir);
+		if (!OnMap(a_from) || !OnMap(a_target) || !Finite(a_dir) || !std::isfinite(n) || n < 1e-6f) {
+			return false;
+		}
+		const Vec3  u = a_dir * (1.0f / n), d = a_target - a_from;
+		const float along = Dot(d, u);
+		return along > 0.0f && Length(d - u * along) <= TubeAt(along, SafeRadius(a_radius));
+	}
+
+	float StartShare(Vec3 a_point, Vec3 a_muzzleA, Vec3 a_muzzleB) noexcept
+	{
+		const float     length = Length(a_muzzleB - a_muzzleA);
+		const AxisPoint p = Project(a_point, a_muzzleA, a_muzzleB);
+		if (!std::isfinite(length) || length < 1.0f || p.off == kNowhere) {
+			return 0.5f;
+		}
+		return std::clamp(p.along / length, kMinShare, kMaxShare);
+	}
+
+	float StreamReach(float a_range, float a_speed, float a_lifetime) noexcept
+	{
+		float reach = std::numeric_limits<float>::infinity();
+		if (std::isfinite(a_range) && a_range > 0.0f) {
+			reach = a_range;
+		}
+		if (std::isfinite(a_speed) && a_speed > 0.0f && std::isfinite(a_lifetime) && a_lifetime > 0.0f) {
+			reach = std::min(reach, a_speed * a_lifetime);  // an overflow to infinity loses to the range, or falls back
+		}
+		return std::clamp(std::isfinite(reach) ? reach : kReachFallback, kReachMin, kReachMax);
+	}
+
+	bool InReach(float a_distance, float a_reachA, float a_reachB) noexcept
+	{
+		const auto reach = [](float r) { return std::isfinite(r) ? std::clamp(r, 0.0f, kWorld) : 0.0f; };
+		return !std::isnan(a_distance) && a_distance <= kReachSlack * (reach(a_reachA) + reach(a_reachB)) + kReachExtra;
+	}
+
+	float Wobble(float a_age) noexcept
+	{
+		if (!std::isfinite(a_age)) {
+			return 0.0f;
+		}
+		return std::clamp(0.6f * std::sin(5.1f * a_age) + 0.4f * std::sin(8.3f * a_age + 1.3f), -1.0f, 1.0f);
+	}
+
+	Front FrontOf(const Struggle& a_s) noexcept
+	{
+		Front f;
+		if (!a_s.placed || !OnMap(a_s.muzzleA) || !OnMap(a_s.muzzleB)) {
+			return f;
+		}
+		const Vec3  ab = a_s.muzzleB - a_s.muzzleA;
+		const float length = Length(ab);
+		if (!std::isfinite(length) || length < 1.0f) {
+			return f;
+		}
+		const auto  reach = [](float r) { return std::isfinite(r) ? std::clamp(r, 0.0f, kWorld) : 0.0f; };
+		const float share = std::isfinite(a_s.startShare) ? std::clamp(a_s.startShare, 0.0f, 1.0f) : 0.5f;
+		// neither hand, nor beyond what either stream reaches: B's stream reaches from its end back to `lo`
+		float lo = std::max(kHandGap, length - kReachUsed * reach(a_s.reachB));
+		float hi = std::min(length - kHandGap, kReachUsed * reach(a_s.reachA));
+		if (lo > hi) {
+			// too close, or streams too short to meet: it stays where it is
+			lo = hi = length < 2.0f * kHandGap + 1.0f ? 0.5f * length : std::clamp(share * length, kHandGap, length - kHandGap);
+		}
+		const float x0 = std::clamp(share * length, lo, hi);
+		// the wobble fades toward either end, so the ends are still exactly the hands and the order never turns
+		const float balance = WithinOne(a_s.balance);
+		const float shown = balance + kWobble * Wobble(a_s.age) * (1.0f - std::abs(balance));
+		f.at = std::clamp(shown >= 0.0f ? x0 + shown * (hi - x0) : x0 + shown * (x0 - lo), lo, hi);
+		f.from = a_s.muzzleA;
+		f.axis = ab * (1.0f / length);
+		f.point = f.from + f.axis * f.at;
+		f.length = length;
+		f.valid = true;
+		return f;
+	}
+
+	bool PastFront(const Front& a_front, bool a_sideA, Vec3 a_point, float a_radius) noexcept
+	{
+		if (!a_front.valid || !OnMap(a_point)) {
+			return false;
+		}
+		const Vec3  d = a_point - a_front.from;
+		const float fromA = Dot(d, a_front.axis);
+		const float off = Length(d - a_front.axis * fromA);
+		// each side is measured from its own muzzle, in its own tube
+		const float along = a_sideA ? fromA : a_front.length - fromA;
+		const float at = a_sideA ? a_front.at : a_front.length - a_front.at;
+		const float r = SafeRadius(a_radius);
+		return InCorridor({ along, off }, a_front.length, r) && along + r > at;
+	}
+
+	float BeamCut(const Front& a_front, Vec3 a_origin, Vec3 a_dir, float a_full) noexcept
+	{
+		const float full = std::isfinite(a_full) ? std::clamp(a_full, 0.0f, kWorld) : 0.0f;
+		const float n = Length(a_dir);
+		if (!a_front.valid || full <= kBeamMin || !OnMap(a_origin) || !Finite(a_dir) || !std::isfinite(n) || n < 1e-6f) {
+			return full;
+		}
+		const float aligned = Dot(a_dir, a_front.axis) / n;
+		if (!(std::abs(aligned) >= kBeamAligned)) {
+			return full;  // nearly square to the axis: the plane is no measure of where it should end
+		}
+		const float toPlane = Dot(a_front.point - a_origin, a_front.axis) / aligned;
+		return std::clamp(toPlane + kBeamPast, kBeamMin, full);
+	}
+
+	std::uint64_t Mix(std::uint64_t a_x) noexcept
+	{
+		std::uint64_t z = a_x + 0x9E3779B97F4A7C15ull;
+		z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+		z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+		return z ^ (z >> 31);
+	}
+
+	bool Roll(std::uint64_t a_seed, float a_percent) noexcept
+	{
+		if (!(a_percent > 0.0f)) {
+			return false;
+		}
+		if (a_percent >= 100.0f) {
+			return true;
+		}
+		// mixed again, so a seed that is only a counter still rolls fairly
+		const std::uint64_t top = Mix(a_seed) >> 40;  // 24 bits
+		return static_cast<double>(top) < static_cast<double>(a_percent) * (16777216.0 / 100.0);
+	}
+
+	float OverwhelmHit(float a_magnitude, float a_lead, float a_resist, const StruggleConfig& a_config) noexcept
+	{
+		const float magnitude = std::isfinite(a_magnitude) ? std::clamp(a_magnitude, 0.0f, kMaxMagnitude) : 0.0f;
+		const float resist = std::isfinite(a_resist) ? std::clamp(a_resist, 0.0f, kMaxResist) : 0.0f;
+		const float scale = Clamped(a_config.overwhelmDamage, kStruggleDefaults.overwhelmDamage, 0.0f, 5.0f);
+		return magnitude * 2.0f * scale * (0.75f + 0.5f * std::abs(WithinOne(a_lead))) * (1.0f - resist / 100.0f);
+	}
+
+	float ShakeStrength(float a_base, float a_distance, const StruggleConfig& a_config) noexcept
+	{
+		const float base = std::isfinite(a_base) ? std::max(a_base, 0.0f) : 0.0f;
+		const float distance = std::isfinite(a_distance) ? std::max(a_distance, 0.0f) : kShakeFade;  // unknown: too far to feel
+		const float fade = std::clamp(1.0f - distance / kShakeFade, 0.0f, 1.0f);
+		return std::clamp(Clamped(a_config.cameraShake, kStruggleDefaults.cameraShake, 0.0f, 1.0f) * base * fade, 0.0f, 1.0f);
+	}
+
+	float StaggerFor(float a_lead, const StruggleConfig& a_config) noexcept
+	{
+		return Clamped(a_config.staggerStrength, kStruggleDefaults.staggerStrength, 0.0f, 1.0f) * (0.5f + 0.5f * std::abs(WithinOne(a_lead)));
+	}
+
+	Struggle* StruggleBook::Find(std::uint32_t a, std::uint32_t b) noexcept
+	{
+		const auto it = _book.find(PairKey(a, b));
+		return it != _book.end() ? &it->second : nullptr;
+	}
+
+	bool StruggleBook::Engaged(std::uint32_t a_shooter) const noexcept
+	{
+		// a handful at most: a look at each is cheaper than a second map to keep in step
+		return std::ranges::any_of(_book, [&](const auto& a_kv) {
+			const Struggle& s = a_kv.second;
+			return (s.a == a_shooter || s.b == a_shooter) && (s.phase == Phase::kLocked || s.phase == Phase::kBroken);
+		});
+	}
+
+	bool StruggleBook::Loser(std::uint32_t a_shooter) const noexcept
+	{
+		return std::ranges::any_of(_book, [&](const auto& a_kv) {
+			const Struggle& s = a_kv.second;
+			return s.phase == Phase::kBroken && (s.aWon ? s.b : s.a) == a_shooter;
+		});
+	}
+
+	bool StruggleBook::Holds(std::uint32_t a, std::uint32_t b) const noexcept
+	{
+		const auto it = _book.find(PairKey(a, b));
+		return it != _book.end() && (it->second.phase == Phase::kLocked || it->second.phase == Phase::kBroken);
+	}
+
+	Struggle& StruggleBook::Put(const Struggle& a_struggle) { return _book.insert_or_assign(PairKey(a_struggle.a, a_struggle.b), a_struggle).first->second; }
+
+	void StruggleBook::Erase(std::uint64_t a_key) { _book.erase(a_key); }
+
 	// ------------------------------------------------------------------ form references
 	bool ParseFormRef(std::string_view a_text, FormRef& a_out)
 	{
@@ -685,6 +1250,49 @@ namespace Crossfire::Core
 			CF_FLOAT("Clash", "ArrowScale", tuning.arrowScale, 0.0f, 100.0f, "an arrow's strength per point of its damage"),
 			CF_FLOAT("Clash", "ShoutStrength", tuning.shoutStrength, 0.0f, 100000.0f, "every shout's strength (shouts cost no magicka)"),
 			CF_FLOAT("Clash", "MinSpellStrength", tuning.minSpellStrength, 0.0f, 1000.0f, "no spell is weaker than this"),
+			CF_BOOL("Struggle", "Struggles", struggle.enabled, "when enemy sprays, held beams or breath meet, they lock together and push (0: they clash particle by particle)"),
+			CF_BOOL("Struggle", "LockSprays", struggle.sprays, "Flames, Frostbite and other sprays lock"),
+			CF_BOOL("Struggle", "LockBeams", struggle.beams, "Sparks, Lightning Storm and other held beams lock (a one-shot bolt never does)"),
+			CF_BOOL("Struggle", "LockBreath", struggle.breath, "Fire and Frost Breath, yours or a dragon's, lock with breath, sprays and beams"),
+			CF_BOOL("Struggle", "OppositesLock", struggle.opposites, "opposites that would cancel each other (Fire and Frost) lock like any other pair"),
+			CF_BOOL("Struggle", "BeamsStop", struggle.beamsStop, "a locked beam is cut short at the meeting point (experimental)"),
+			CF_BOOL("Struggle", "NPCStruggles", struggle.betweenOthers, "two enemies of each other (your follower and a necromancer) can lock too"),
+			CF_BOOL("Struggle", "CreatureStruggles", struggle.creatures, "atronachs, hagravens, draugr and other creatures that cast a spray or beam take part"),
+			CF_FLOAT("Struggle", "StruggleChance", struggle.chance, 0.0f, 100.0f, "chance (percent) two casters lock when their streams meet, rolled once each time"),
+			CF_FLOAT("Struggle", "DragonChance", struggle.dragonChance, 0.0f, 100.0f, "the lock chance when one side is a dragon (0: never with dragons)"),
+			CF_FLOAT("Struggle", "PushTime", struggle.pushTime, 1.0f, 30.0f, "seconds for a caster twice as strong to push from where they met to the other's hands"),
+			CF_FLOAT("Struggle", "MaxStruggleTime", struggle.maxTime, 0.0f, 60.0f, "seconds; when time runs out, whoever is ahead breaks through (0: no limit)"),
+			CF_BOOL("Power", "SkillAlwaysWins", struggle.skillAlwaysWins, "when both cast from a school of magic, the higher skill always pushes through"),
+			CF_INT("Power", "SkillSource", struggle.skillSource, 0.0f, 2.0f, "which skill counts as a caster's magic level: 0 the spell's own school, 1 the best school, 2 the average of the five"),
+			CF_FLOAT("Power", "SkillWeight", struggle.skillWeight, 0.0f, 3.0f, "how much magic skill counts (at 1, each point over the other is worth 2% more push)"),
+			CF_FLOAT("Power", "LevelWeight", struggle.levelWeight, 0.0f, 3.0f, "how much character level counts (at 1, each level over the other is worth 2%)"),
+			CF_FLOAT("Power", "SpellWeight", struggle.spellWeight, 0.0f, 2.0f, "how much a costlier spell counts (0: only the caster matters)"),
+			CF_FLOAT("Power", "MagickaWeight", struggle.magickaWeight, 0.0f, 2.0f, "a caster low on magicka pushes less (0: magicka left does not matter)"),
+			CF_FLOAT("Power", "DualCastBonus", struggle.dualBonus, 1.0f, 3.0f, "extra push for a dual cast, a staff, or streaming with both hands at once"),
+			CF_FLOAT("Power", "BreathStrength", struggle.breathStrength, 1.0f, 500.0f, "what a breath counts as: a spell of this magicka cost (Flames is about 14)"),
+			CF_FLOAT("Power", "ShoutWordBonus", struggle.wordBonus, 0.0f, 1.0f, "each word of a breath shout past the first adds this share of push"),
+			CF_FLOAT("Power", "EnemyPower", struggle.enemyPower, 0.25f, 4.0f, "how hard whoever struggles against you pushes (above 1 is harder)"),
+			CF_FLOAT("Power", "DragonPower", struggle.dragonPower, 0.25f, 4.0f, "how hard a dragon's breath pushes"),
+			CF_FLOAT("Power", "MagickaPressure", struggle.magickaPressure, 0.0f, 3.0f, "the caster being pushed back pays extra magicka, more the further back (0: only the spell's own cost)"),
+			CF_BOOL("Power", "Surge", struggle.surge, "once per struggle, a caster pushed most of the way back surges for 3 seconds"),
+			CF_FLOAT("Power", "SurgePower", struggle.surgePower, 1.0f, 3.0f, "how much harder a surging caster pushes"),
+			CF_BOOL("Aftermath", "BreakCast", struggle.breakCast, "the overwhelmed caster's spell is interrupted, in the hand that lost"),
+			CF_FLOAT("Aftermath", "BreakTime", struggle.breakTime, 0.0f, 5.0f, "seconds the overwhelmed caster reels: any spray or beam they cast in that time fizzles"),
+			CF_BOOL("Aftermath", "StaggerLoser", struggle.stagger, "the overwhelmed caster staggers, with the game's own stagger (not dragons)"),
+			CF_BOOL("Aftermath", "StaggerPlayer", struggle.staggerPlayer, "you also stagger when you are overwhelmed"),
+			CF_FLOAT("Aftermath", "StaggerStrength", struggle.staggerStrength, 0.0f, 1.0f, "how hard the stagger is (a clearer win staggers harder)"),
+			CF_FLOAT("Aftermath", "OverwhelmDamage", struggle.overwhelmDamage, 0.0f, 5.0f, "an extra hit on the overwhelmed caster, about two seconds of the winning stream (0: none)"),
+			CF_BOOL("Aftermath", "Finishers", struggle.finishers, "a breakthrough that kills throws the body away from the winner (experimental)"),
+			CF_FLOAT("Aftermath", "FinisherForce", struggle.finisherForce, 0.0f, 20.0f, "how hard the body is thrown"),
+			CF_BOOL("Aftermath", "Intimidate", struggle.intimidate, "when you break through and kill, nearby enemies of lower level than your victim are frightened"),
+			CF_FLOAT("Aftermath", "StruggleXP", struggle.xp, 0.0f, 200.0f, "skill experience in your spell's school each time you overwhelm someone, doubled if it kills (0: none)"),
+			CF_BOOL("Aftermath", "StruggleMessages", struggle.messages, "a message when you overwhelm someone, they overwhelm you, they give way, or the spells burst between you"),
+			CF_BOOL("Show", "LockBursts", struggle.lockBursts, "bursts where streams lock, now and then while they grind, and where one breaks"),
+			CF_FLOAT("Show", "CameraShake", struggle.cameraShake, 0.0f, 1.0f, "a kick when your stream locks, a rumble as the lock nears you, a jolt on a breakthrough (0: off)"),
+			CF_BOOL("Show", "StruggleBar", struggle.bar, "while you are locked, a bar shows who is pushing (needs SKSE Menu Framework)"),
+			CF_FLOAT("Show", "BarHeight", struggle.barHeight, 0.0f, 100.0f, "how far down the screen the bar sits (percent)"),
+			CF_FLOAT("Show", "BarScale", struggle.barScale, 0.5f, 2.0f, "how big the bar is"),
+			CF_FLOAT("Show", "BarOpacity", struggle.barOpacity, 0.1f, 1.0f, "how solid the bar is"),
 			CF_BOOL("Effects", "Explosions", explosions, "a destroyed projectile bursts where it was hit, with its own explosion"),
 			CF_BOOL("Effects", "SafeExplosionsOnly", safeExplosionsOnly, "skip an explosion that would do more than show (damage, an enchantment, something it spawns)"),
 			CF_INT("Effects", "MaxExplosionsPerFrame", maxExplosionsPerFrame, 0.0f, 32.0f, "at most this many bursts in one frame"),
@@ -698,7 +1306,8 @@ namespace Crossfire::Core
 #undef CF_INT
 #undef CF_FLOAT
 
-		constexpr std::array<std::string_view, 7> kSettingSections{ "General", "Hits", "Clash", "Effects", "Player", "Events", "Debug" };
+		constexpr std::array<std::string_view, 11> kSettingSections{ "General", "Hits", "Clash", "Struggle", "Power", "Aftermath", "Show",
+			"Effects", "Player", "Events", "Debug" };
 
 		[[nodiscard]] bool ParseNumber(std::string_view a_text, float& a_out) noexcept
 		{

@@ -174,9 +174,11 @@ namespace Crossfire
 		for (const auto& list : config.keywords) {
 			keywords += list.size();
 		}
-		SKSE::log::info("settings: {}, who {}, overpower x{}, radius x{} +{}, explosions {}, {} keyword(s), {} exclusion(s) ({} found)",
+		SKSE::log::info("settings: {}, who {}, overpower x{}, radius x{} +{}, explosions {}, {} keyword(s), {} exclusion(s) ({} found), "
+						"struggles {}, skill x{}, push {} s",
 			config.enabled ? "on" : "off", config.who, config.overpowerRatio, config.radiusScale, config.radiusBonus,
-			config.explosions ? (config.safeExplosionsOnly ? "safe only" : "all") : "off", keywords, config.exclude.size(), gExcluded.size());
+			config.explosions ? (config.safeExplosionsOnly ? "safe only" : "all") : "off", keywords, config.exclude.size(), gExcluded.size(),
+			config.struggle.enabled ? "on" : "off", config.struggle.skillWeight, config.struggle.pushTime);
 	}
 
 	const Core::Config& Live() { return gLive; }

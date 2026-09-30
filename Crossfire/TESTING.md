@@ -47,8 +47,20 @@ A hostile mage to shoot at: any bandit or necromancer mage in a dungeon; or `pla
 | 12 | the menu: change sliders, untick Enabled, Reload | each applies at once; `Crossfire.ini` is written when a control is let go |
 | 13 | Lightning Bolt across an incoming spell | the bolt is never destroyed; a weaker spell is |
 | 14 | a wall of frost, then fire through it | the fire is stopped at the wall |
+| 15 | Flames against a bandit mage's Flames, face to face | they lock; the meeting point moves toward the lower Destruction skill; the bar shows it |
+| 16 | Sparks against an enemy's Sparks | they lock; with "Beams stop where they meet" each beam ends at the meeting point |
+| 17 | Fire Breath against a dragon's breath | they lock (Dragon lock chance) |
+| 18 | your follower's Flames past yours | never a lock (allies) |
+| 19 | let go of the button while losing / while even | "X overwhelms you" / "You give way" (no message for you) |
+| 20 | Fire against Frost with "Fire and frost lock too" off | they cancel particle by particle, as before |
+| 21 | save and load in the middle of a lock | no crash; the lock is gone |
+| 22 | the log at load | names the Fear spell found for Intimidate (or says none) |
 
 Worth watching, because the game could not be run here:
+
+- **Locked beams.** Whether a beam honours its range written after launch, and whether a held beam is one
+  projectile or relaunched. If a locked beam is not cut short, turn "Beams stop where they meet" off; the struggle
+  still works (the bar, the breakthrough).
 
 - **Beams and walls.** A lightning bolt is tested as a line from where it starts, along the way it faces, to where it
   hit (or its range). A wall is an upright rectangle `BarrierHeight` tall, its base centre at the wall's position,

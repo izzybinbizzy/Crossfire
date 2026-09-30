@@ -14,6 +14,7 @@
 //                   strength contest, the settings files. Tested on its own: tests/run.sh
 //   Classify.cpp    what a projectile is to Crossfire (hostile? which element? how costly?), remembered
 //   Clash.cpp       the pass, once a frame: gather, find touches, settle them
+//   Struggle.cpp    sprays, beams and breath that lock: who pushes whom, and what happens when one breaks
 //   Settings.cpp    the files: Crossfire_Rules.ini, Crossfire\*.ini, Crossfire.ini
 //   Menu.cpp        the settings page, in SKSE Menu Framework's Mod Control Panel
 //   CrossfireAPI.h  what other SKSE plugins are told of each clash
@@ -56,6 +57,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 		case SKSE::MessagingInterface::kDataLoaded:
 			Crossfire::LoadSettings();
 			Crossfire::Survey();
+			Crossfire::FindFearSpell();
 			Install();
 			Crossfire::RegisterMenu();
 			break;

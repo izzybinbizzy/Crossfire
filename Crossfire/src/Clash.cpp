@@ -18,10 +18,17 @@ namespace Crossfire
 {
 	namespace
 	{
+		using Core::PairKey;
 		using Core::Vec3;
 
 		[[nodiscard]] Vec3         V(const RE::NiPoint3& a_p) noexcept { return { a_p.x, a_p.y, a_p.z }; }
 		[[nodiscard]] RE::NiPoint3 N(Vec3 a_v) noexcept { return { a_v.x, a_v.y, a_v.z }; }
+		// a unit vector along a_v; zero for none (not finite, or too short to have a direction)
+		[[nodiscard]] Vec3 Unit(Vec3 a_v) noexcept
+		{
+			const float l = Core::Length(a_v);
+			return std::isfinite(l) && l > 1e-4f ? a_v * (1.0f / l) : Vec3{};
+		}
 
 		// what we remember of a projectile between frames, by its handle
 		struct Track
@@ -45,6 +52,11 @@ namespace Crossfire
 			RE::Actor*                       actor{ nullptr };
 			bool                             player{ false };
 			bool                             killed{ false };
+			bool                             lockable{ false };  // a stream that may lock in a spell struggle
+			std::size_t                      stream{ 0 };        // its place in gStreams, when lockable
+			Vec3                             dir;                // which way it goes this frame
+			float                            radius{ 0.0f };
+			float                            length{ 0.0f };     // a beam's, as drawn
 		};
 
 		Stats gStats;
@@ -58,14 +70,10 @@ namespace Crossfire
 		std::vector<Entry>                         gEntries;
 		std::vector<Core::Body>                    gBodies;
 		std::vector<Core::Contact>                 gContacts;
+		std::vector<StreamRef>                     gStreams;  // this frame's lockable streams, for Struggle.cpp
 		Core::Limiter                              gBursts, gXP, gEvents;
 		std::uint32_t                              gFrame = 0;
 		double                                     gClock = 0.0;  // game seconds since the game started; never goes back
-
-		[[nodiscard]] std::uint64_t PairKey(std::uint32_t a, std::uint32_t b) noexcept
-		{
-			return (static_cast<std::uint64_t>(std::min(a, b)) << 32) | std::max(a, b);
-		}
 
 		void Gather()
 		{
@@ -238,6 +246,8 @@ namespace Crossfire
 		gEntries.clear();
 		gBodies.clear();
 		gContacts.clear();
+		gStreams.clear();
+		Struggles::Reset(false);  // the handles it holds belong to the world that went away
 		gBursts = {};
 		gXP = {};
 		gEvents = {};
@@ -248,7 +258,8 @@ namespace Crossfire
 	{
 		const auto& cfg = Live();
 		if (!cfg.enabled || !std::isfinite(a_delta) || a_delta <= 0.0f) {
-			if (!gTracks.empty()) {
+			if (!gTracks.empty() || Struggles::Active()) {
+				Struggles::Reset(true);  // held beams get their range back first, while their handles still mean something
 				Reset();  // off, or time stood still: whatever we remembered is stale when it moves again
 			}
 			return;
@@ -307,6 +318,17 @@ namespace Crossfire
 				continue;
 			}
 
+			auto       shooterRef = rd.shooter.get();
+			auto*      actor = shooterRef ? shooterRef->As<RE::Actor>() : nullptr;
+			const bool lockable = cfg.struggle.enabled && actor && Core::StreamOn(info.stream, cfg.struggle);
+			if (lockable && Struggles::Reeling(rd.shooter.native_handle())) {
+				// it was overwhelmed a moment ago: whatever it streams now fizzles, and the winner's pours over it
+				p->Kill();
+				gKilled.insert_or_assign(native, gClock);
+				gStats.cut.fetch_add(1, std::memory_order_relaxed);
+				continue;
+			}
+
 			auto [it, fresh] = gTracks.try_emplace(native);
 			Track&     track = it->second;
 			const bool continuous = !fresh && track.frame + 1 == gFrame;
@@ -323,6 +345,8 @@ namespace Crossfire
 			b.element = info.element;
 			b.immune = info.immune;
 			b.strength = track.strength;
+			b.lockable = lockable;
+			Vec3 dir;
 			switch (info.shape) {
 			case Core::Shape::kSphere:
 				{
@@ -335,6 +359,10 @@ namespace Crossfire
 					}
 					b.from = from;
 					b.to = now;
+					dir = Core::Length(now - from) > 1e-3f ? Unit(now - from) : Unit(V(rd.linearVelocity));
+					if (!Core::Finite(dir) || Core::Length(dir) < 0.5f) {
+						dir = Unit(V(rd.velocity));
+					}
 					if (info.cone) {
 						const auto& cone = static_cast<RE::ConeProjectile*>(p)->GetConeRuntimeData();
 						b.radius = radius(Core::ConeRadius(cone.initialCollisionSphereRadius, Core::Length(now - V(cone.origin)), cone.coneAngleTangent));
@@ -349,6 +377,7 @@ namespace Crossfire
 					b.from = now;
 					b.to = now + Core::DirectionFromAngles(angle.x, angle.z) * BeamLength(rd, base, now);
 					b.radius = radius(base->data.collisionRadius);
+					dir = Unit(b.to - b.from);
 					break;
 				}
 			case Core::Shape::kBarrier:
@@ -371,9 +400,13 @@ namespace Crossfire
 			}
 
 			Entry e;
-			e.shooterRef = rd.shooter.get();
+			e.shooterRef = std::move(shooterRef);
 			e.shooter = rd.shooter.native_handle();
-			e.actor = e.shooterRef ? e.shooterRef->As<RE::Actor>() : nullptr;
+			e.actor = actor;
+			e.lockable = lockable;
+			e.dir = Core::Finite(dir) ? dir : Vec3{};
+			e.radius = b.radius;
+			e.length = Core::Length(b.to - b.from);
 			e.player = e.shooter != 0 && e.shooter == playerHandle;
 			e.ref = std::move(ref);
 			e.base = base;
@@ -387,10 +420,51 @@ namespace Crossfire
 		}
 		gStats.tracked.store(static_cast<std::uint32_t>(gEntries.size()), std::memory_order_relaxed);
 
+		gBursts.BeginFrame(gClock, cfg.maxExplosionsPerFrame, cfg.explosionCooldown);
+		gXP.BeginFrame(gClock, 1, 0.5f);
+		gEvents.BeginFrame(gClock, 8, 0.25f);
+
+		// the struggles: every lockable stream, then one step of each lock (it may snuff particles past a front)
+		gStreams.clear();
+		for (std::size_t i = 0; i < gEntries.size(); ++i) {
+			auto& e = gEntries[i];
+			if (!e.lockable) {
+				continue;
+			}
+			auto* p = e.ref.get();
+			auto& rd = p->GetProjectileRuntimeData();
+			StreamRef s;
+			s.entry = i;
+			s.projectile = p;
+			s.handle = RE::ProjectileHandle(p);
+			s.native = e.handle;
+			s.shooter = e.shooter;
+			s.shooterHandle = rd.shooter;
+			s.actor = e.actor;
+			s.player = e.player;
+			s.info = &e.info;
+			s.base = e.base;
+			s.now = e.now;
+			s.dir = e.dir;
+			s.radius = e.radius;
+			s.length = e.length;
+			s.power = std::isfinite(rd.power) && rd.power > 0.0f ? rd.power : 1.0f;
+			s.source = rd.castingSource;
+			e.stream = gStreams.size();
+			gStreams.push_back(s);
+		}
+		Struggles::Frame(gStreams, cfg, a_delta, gFrame);
+
 		if (gEntries.size() >= 2) {
 			const auto may = [&](std::size_t i, std::size_t j) {
 				const Entry& a = gEntries[i];
 				const Entry& b = gEntries[j];
+				if (a.killed || b.killed) {
+					return false;
+				}
+				if (a.lockable && b.lockable && Struggles::Holds(a.shooter, b.shooter)) {
+					return false;  // a locked pair meets at its front, not particle by particle
+				}
 				const Core::Shooters s{ a.shooter, b.shooter, a.player, b.player, a.actor != nullptr, b.actor != nullptr };
 				return Core::MayInteract(s, cfg.who, cfg.ignoreAllies, [&]() { return Hostile(a, b); });
 			};
@@ -399,9 +473,6 @@ namespace Crossfire
 			gContacts.clear();
 		}
 
-		gBursts.BeginFrame(gClock, cfg.maxExplosionsPerFrame, cfg.explosionCooldown);
-		gXP.BeginFrame(gClock, 1, 0.5f);
-		gEvents.BeginFrame(gClock, 8, 0.25f);
 		for (const auto& c : gContacts) {
 			Entry& a = gEntries[c.a];
 			Entry& b = gEntries[c.b];
@@ -411,6 +482,10 @@ namespace Crossfire
 			const auto meeting = PairKey(a.handle, b.handle);
 			if (gSettled.contains(meeting)) {
 				continue;
+			}
+			if (a.lockable && b.lockable && a.shooter != b.shooter &&
+				Struggles::TryBegin(gStreams[a.stream], gStreams[b.stream], c.touch.point, cfg)) {
+				continue;  // they locked (or already are): the struggle settles it, not a clash
 			}
 			const float sa = a.track->strength, sb = b.track->strength;
 			const auto  o = Core::Resolve(cfg.reactions, cfg.overpowerRatio, cfg.weakenSurvivor, a.info.element, sa, a.info.immune,
@@ -446,6 +521,37 @@ namespace Crossfire
 			return !gTracks.contains(static_cast<std::uint32_t>(a_pair >> 32)) || !gTracks.contains(static_cast<std::uint32_t>(a_pair));
 		});
 		gEntries.clear();
+		gStreams.clear();
 		gHandles.clear();
+	}
+
+	void Snuff(std::size_t a_entry)
+	{
+		if (a_entry >= gEntries.size()) {
+			return;
+		}
+		auto& e = gEntries[a_entry];
+		if (e.killed) {
+			return;
+		}
+		e.ref->Kill();
+		e.killed = true;
+		gKilled.insert_or_assign(e.handle, gClock);
+		gStats.cut.fetch_add(1, std::memory_order_relaxed);
+	}
+
+	bool BurstAt(std::size_t a_entry, Core::Vec3 a_at, std::uint64_t a_pair, const Core::Config& a_config)
+	{
+		if (a_entry >= gEntries.size() || !a_config.explosions) {
+			return false;
+		}
+		auto& e = gEntries[a_entry];
+		auto* p = e.ref.get();
+		auto* explosion = ExplosionOf(p, e.base);
+		if (!explosion || (a_config.safeExplosionsOnly && !SafeExplosion(explosion)) || !gBursts.Allow(a_pair)) {
+			return false;
+		}
+		Burst(p, explosion, a_at);
+		return true;
 	}
 }

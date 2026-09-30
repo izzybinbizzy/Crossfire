@@ -162,6 +162,14 @@ namespace Crossfire
 			info.element = ElementOf(effect, voice, info.cone);
 			info.cost = CostOf(spell);
 			info.skill = voice ? RE::ActorValue::kNone : spell->GetAssociatedSkill();
+			const bool concentration = spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
+			info.staff = spell->GetSpellType() == RE::MagicSystem::SpellType::kStaffEnchantment;
+			info.absorb = effect && effect->data.archetype == RE::EffectArchetypes::ArchetypeID::kAbsorb;
+			info.resist = effect ? effect->data.resistVariable : RE::ActorValue::kNone;
+			if (const auto* top = spell->GetCostliestEffectItem(); top && std::isfinite(top->effectItem.magnitude)) {
+				info.magnitude = top->effectItem.magnitude;
+			}
+			info.spell = spell;
 			switch (type) {
 			case RE::FormType::ProjectileBeam:
 				info.kind = Core::Kind::kBeam;
@@ -187,6 +195,7 @@ namespace Crossfire
 				info.kind = voice ? Core::Kind::kVoice : Core::Kind::kSpell;
 				break;
 			}
+			info.stream = Core::StreamOf(info.kind, concentration, voice);  // the switches are read live, not cached here
 			(void)a_base;
 			return info;
 		}
@@ -231,6 +240,49 @@ namespace Crossfire
 		return a_explosion && !a_explosion->formEnchanting && !(a_explosion->data.damage > 0.0f) && !a_explosion->data.spawnProjectile &&
 		       !a_explosion->data.impactPlacedObject;
 	}
+
+	namespace
+	{
+		RE::SpellItem* gFear = nullptr;
+	}
+
+	// the cheapest of Skyrim.esm's own aimed Illusion fear spells (Fear itself), for "Winning scares weaker enemies"
+	void FindFearSpell()
+	{
+		gFear = nullptr;
+		auto* data = RE::TESDataHandler::GetSingleton();
+		if (!data) {
+			return;
+		}
+		float best = 0.0f;
+		for (auto* s : data->GetFormArray<RE::SpellItem>()) {
+			if (!s || s->GetSpellType() != RE::MagicSystem::SpellType::kSpell ||
+				s->GetCastingType() != RE::MagicSystem::CastingType::kFireAndForget || s->GetDelivery() != RE::MagicSystem::Delivery::kAimed ||
+				s->GetAssociatedSkill() != RE::ActorValue::kIllusion) {
+				continue;
+			}
+			const auto* file = s->GetFile(0);
+			if (!file || _stricmp(std::string(file->GetFilename()).c_str(), "Skyrim.esm") != 0) {
+				continue;
+			}
+			const auto* top = s->GetCostliestEffectItem();
+			if (!top || !top->baseEffect || top->baseEffect->data.archetype != RE::EffectArchetypes::ArchetypeID::kDemoralize) {
+				continue;
+			}
+			const float cost = CostOf(s);
+			if (!gFear || cost < best) {
+				gFear = s;
+				best = cost;
+			}
+		}
+		if (gFear) {
+			SKSE::log::info("struggles: the fear spell for Intimidate is {:08X} {}", gFear->GetFormID(), gFear->GetName());
+		} else {
+			SKSE::log::info("struggles: no fear spell found in Skyrim.esm, so Intimidate is unavailable");
+		}
+	}
+
+	RE::SpellItem* FearSpell() { return gFear; }
 
 	void Survey()
 	{
