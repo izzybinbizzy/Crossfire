@@ -454,6 +454,10 @@ namespace Crossfire
 			gStreams.push_back(s);
 		}
 		Struggles::Frame(gStreams, cfg, a_delta, gFrame);
+		if (cfg.debugLog && gFrame % 300 == 0 && !gEntries.empty()) {
+			SKSE::log::info("pass: {} projectile(s) in range, {} of them lockable stream(s), {} handle(s) in the manager", gEntries.size(),
+				gStreams.size(), gHandles.size());
+		}
 
 		if (gEntries.size() >= 2) {
 			const auto may = [&](std::size_t i, std::size_t j) {
@@ -469,6 +473,9 @@ namespace Crossfire
 				return Core::MayInteract(s, cfg.who, cfg.ignoreAllies, [&]() { return Hostile(a, b); });
 			};
 			Core::FindContacts(gBodies, may, static_cast<std::size_t>(cfg.maxContactsPerFrame), gContacts);
+			if (cfg.debugLog && !gContacts.empty() && gFrame % 30 == 0) {
+				SKSE::log::info("pass: {} touch(es) this frame among {} projectile(s)", gContacts.size(), gEntries.size());
+			}
 		} else {
 			gContacts.clear();
 		}
