@@ -762,7 +762,7 @@ namespace
 			keys.insert(key);
 			++written;
 		}
-		CHECK(written == 67);  // 24 before the struggles, 43 of them
+		CHECK(written == 68);  // 24 before the struggles, 44 of them
 		CHECK(keys.size() == written);
 		const Range push = RangeOf("PushTime"), scale = RangeOf("barscale"), source = RangeOf("SkillSource");
 		CHECK(push.lo == 1.0f && push.hi == 30.0f);
@@ -1090,27 +1090,34 @@ namespace
 	void TestFacing()
 	{
 		const Vec3  a{ 0, 0, 0 }, b{ 1000, 0, 0 };
+		constexpr float kGap = 50.0f;  // MinDistance's default
 		const auto  aim = [](float a_degrees, bool a_up) {
             const float r = a_degrees * kPi / 180.0f;
             return a_up ? Vec3{ std::cos(r), 0, std::sin(r) } : Vec3{ std::cos(r), std::sin(r), 0 };
 		};
 		const auto  back = [](Vec3 v) { return Vec3{ -v.x, v.y, v.z }; };  // the same angle, aimed from B toward A
 		for (const bool up : { false, true }) {
-			CHECK(Facing(a, aim(49, up), b, back(aim(0, up))));
-			CHECK(!Facing(a, aim(51, up), b, back(aim(0, up))));
-			CHECK(Facing(a, aim(0, up), b, back(aim(49, up))));
-			CHECK(!Facing(a, aim(0, up), b, back(aim(51, up))));
-			CHECK(!Facing(a, aim(-51, up), b, back(aim(-51, up))));
+			CHECK(Facing(a, aim(49, up), b, back(aim(0, up)), kGap));
+			CHECK(!Facing(a, aim(51, up), b, back(aim(0, up)), kGap));
+			CHECK(Facing(a, aim(0, up), b, back(aim(49, up)), kGap));
+			CHECK(!Facing(a, aim(0, up), b, back(aim(51, up)), kGap));
+			CHECK(!Facing(a, aim(-51, up), b, back(aim(-51, up)), kGap));
 		}
-		CHECK(!Facing(a, { 1, 0, 0 }, { 149, 0, 0 }, { -1, 0, 0 }));  // too close to show a lock
-		CHECK(Facing(a, { 1, 0, 0 }, { 150, 0, 0 }, { -1, 0, 0 }));
-		CHECK(Facing(a, { 500, 0, 0 }, b, { -0.01f, 0, 0 }));  // an aim need not be a unit
-		CHECK(!Facing(a, { 0, 0, 0 }, b, { -1, 0, 0 }));      // no aim at all
-		CHECK(!Facing(a, { -1, 0, 0 }, b, { -1, 0, 0 }));     // A turned away
-		CHECK(!Facing(a, { NAN, 0, 0 }, b, { -1, 0, 0 }));
-		CHECK(!Facing({ NAN, 0, 0 }, { 1, 0, 0 }, b, { -1, 0, 0 }));
-		CHECK(!Facing(a, { 1, 0, 0 }, { INFINITY, 0, 0 }, { -1, 0, 0 }));
-		CHECK(!Facing(a, { 1, 0, 0 }, b, { -INFINITY, 0, 0 }));
+		CHECK(!Facing(a, { 1, 0, 0 }, { 49, 0, 0 }, { -1, 0, 0 }, kGap));  // closer than MinDistance
+		CHECK(Facing(a, { 1, 0, 0 }, { 50, 0, 0 }, { -1, 0, 0 }, kGap));
+		CHECK(!Facing(a, { 1, 0, 0 }, { 149, 0, 0 }, { -1, 0, 0 }, 150.0f));  // MinDistance is the setting's
+		CHECK(Facing(a, { 1, 0, 0 }, { 2, 0, 0 }, { -1, 0, 0 }, 0.0f));      // 0: any distance
+		CHECK(!Facing(a, { 1, 0, 0 }, { 0.5f, 0, 0 }, { -1, 0, 0 }, 0.0f));  // but not one point
+		CHECK(Facing(a, { 1, 0, 0 }, { 60, 0, 0 }, { -1, 0, 0 }, NAN));      // a broken setting counts as 0
+		StruggleConfig k;
+		CHECK(k.minGap == kGap && KeepGap(k) < kGap && KeepGap(k) > 0.0f);
+		CHECK(Facing(a, { 500, 0, 0 }, b, { -0.01f, 0, 0 }, kGap));  // an aim need not be a unit
+		CHECK(!Facing(a, { 0, 0, 0 }, b, { -1, 0, 0 }, kGap));      // no aim at all
+		CHECK(!Facing(a, { -1, 0, 0 }, b, { -1, 0, 0 }, kGap));     // A turned away
+		CHECK(!Facing(a, { NAN, 0, 0 }, b, { -1, 0, 0 }, kGap));
+		CHECK(!Facing({ NAN, 0, 0 }, { 1, 0, 0 }, b, { -1, 0, 0 }, kGap));
+		CHECK(!Facing(a, { 1, 0, 0 }, { INFINITY, 0, 0 }, { -1, 0, 0 }, kGap));
+		CHECK(!Facing(a, { 1, 0, 0 }, b, { -INFINITY, 0, 0 }, kGap));
 		std::mt19937                          g(17);
 		std::uniform_real_distribution<float> pos(-2000.0f, 2000.0f), dir(-1.0f, 1.0f);
 		int                                   facing = 0;
@@ -1123,8 +1130,8 @@ namespace
 				aa = aa * 0.6f + (mb - ma) * (1.0f / d);
 				ab = ab * 0.6f + (ma - mb) * (1.0f / d);
 			}
-			const bool x = Facing(ma, aa, mb, ab);
-			CHECK(x == Facing(mb, ab, ma, aa));
+			const bool x = Facing(ma, aa, mb, ab, 150.0f);
+			CHECK(x == Facing(mb, ab, ma, aa, 150.0f));
 			facing += x ? 1 : 0;
 		}
 		CHECK(facing > 1000);  // the random cases really did face each other now and then

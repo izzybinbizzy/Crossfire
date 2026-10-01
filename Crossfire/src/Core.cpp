@@ -714,14 +714,19 @@ namespace Crossfire::Core
 		return a_config.creatures || (!creature(a) && !creature(b));
 	}
 
-	bool Facing(Vec3 a_muzzleA, Vec3 a_aimA, Vec3 a_muzzleB, Vec3 a_aimB) noexcept
+	float KeepGap(const StruggleConfig& a_config) noexcept
+	{
+		return std::isfinite(a_config.minGap) ? std::max(a_config.minGap, 0.0f) * kKeepShare : 0.0f;
+	}
+
+	bool Facing(Vec3 a_muzzleA, Vec3 a_aimA, Vec3 a_muzzleB, Vec3 a_aimB, float a_minGap) noexcept
 	{
 		if (!OnMap(a_muzzleA) || !OnMap(a_muzzleB) || !Finite(a_aimA) || !Finite(a_aimB)) {
 			return false;
 		}
 		const Vec3  ab = a_muzzleB - a_muzzleA;
 		const float gap = Length(ab);
-		if (!(gap >= kMinGap)) {
+		if (!(gap >= (std::isfinite(a_minGap) ? std::max(a_minGap, 0.0f) : 0.0f)) || !(gap > 1.0f)) {
 			return false;
 		}
 		const auto aims = [&](Vec3 a_aim, Vec3 a_toOther) {
@@ -1258,6 +1263,7 @@ namespace Crossfire::Core
 			CF_BOOL("Struggle", "BeamsStop", struggle.beamsStop, "a locked beam is cut short at the meeting point (experimental)"),
 			CF_BOOL("Struggle", "NPCStruggles", struggle.betweenOthers, "two enemies of each other (your follower and a necromancer) can lock too"),
 			CF_BOOL("Struggle", "CreatureStruggles", struggle.creatures, "atronachs, hagravens, draugr and other creatures that cast a spray or beam take part"),
+			CF_FLOAT("Struggle", "MinDistance", struggle.minGap, 0.0f, 300.0f, "casters whose hands are closer than this do not lock (units; 70 is a metre)"),
 			CF_FLOAT("Struggle", "StruggleChance", struggle.chance, 0.0f, 100.0f, "chance (percent) two casters lock when their streams meet, rolled once each time"),
 			CF_FLOAT("Struggle", "DragonChance", struggle.dragonChance, 0.0f, 100.0f, "the lock chance when one side is a dragon (0: never with dragons)"),
 			CF_FLOAT("Struggle", "PushTime", struggle.pushTime, 1.0f, 30.0f, "seconds for a caster twice as strong to push from where they met to the other's hands"),

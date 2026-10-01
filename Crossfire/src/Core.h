@@ -292,9 +292,12 @@ namespace Crossfire::Core
 	// locks, and opposites that would cancel lock when `opposites` is on; Pass, Wins and Loses never do.
 	[[nodiscard]] bool MayLock(const LockSide& a, const LockSide& b, Action a_action, const StruggleConfig& a_config) noexcept;
 
-	// Is each caster aiming at the other (within about 50 degrees of the line between their muzzles), and are they far
-	// enough apart for a lock to show? Two streams that cross by chance, or casters face to face, do not lock.
-	[[nodiscard]] bool Facing(Vec3 a_muzzleA, Vec3 a_aimA, Vec3 a_muzzleB, Vec3 a_aimB) noexcept;
+	// Is each caster aiming at the other (within about 50 degrees of the line between their muzzles), and are they at
+	// least `a_minGap` apart (MinDistance)? Two streams that cross by chance do not lock.
+	[[nodiscard]] bool Facing(Vec3 a_muzzleA, Vec3 a_aimA, Vec3 a_muzzleB, Vec3 a_aimB, float a_minGap) noexcept;
+	// a lock whose casters come closer than this is called off: a little inside MinDistance, so a lock that starts at it
+	// is not called off by a step
+	[[nodiscard]] float KeepGap(const StruggleConfig& a_config) noexcept;
 
 	inline constexpr float kLockIn = 0.4f;        // seconds the lock holds where the streams met before either side pushes
 	inline constexpr float kGrace = 0.35f;        // a side not seen this long has stopped (a spray has gaps between particles)
@@ -307,8 +310,7 @@ namespace Crossfire::Core
 	inline constexpr float kSparkEvery = 0.5f;    // a burst at the lock while both push
 	inline constexpr float kWobble = 0.03f;       // the meeting point trembles this share of the way, for looks only
 	inline constexpr float kHandGap = 60.0f;      // the meeting point never comes closer to either caster's hands
-	inline constexpr float kMinGap = 150.0f;      // casters closer than this do not start a lock
-	inline constexpr float kKeepGap = 128.0f;     // a lock whose casters come this close is called off
+	inline constexpr float kKeepShare = 0.8f;     // of MinDistance: casters closer than this call a lock off
 	inline constexpr float kFacingCos = 0.643f;   // cos 50 degrees
 	inline constexpr float kMinLead = 0.15f;      // the least lead of the more skilled caster when skill always wins
 	inline constexpr float kSkillPoint = 0.02f;   // a point of skill over the other is 2% more push (at weight 1)
@@ -514,6 +516,7 @@ namespace Crossfire::Core
 		bool  beamsStop{ true };      // a locked beam is cut short at the meeting point
 		bool  betweenOthers{ true };  // two casters neither of whom is the player
 		bool  creatures{ true };
+		float minGap{ 50.0f };        // MinDistance: casters' hands closer than this do not start a lock (vanilla combat closes in)
 		float chance{ 100.0f };       // percent, rolled once each time two streams meet
 		float dragonChance{ 100.0f };
 		float pushTime{ 4.0f };       // seconds for a caster twice as strong to push from where they met to the other's hands

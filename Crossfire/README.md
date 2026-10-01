@@ -53,8 +53,10 @@ stagger, take an extra hit (credited to the winner) and reel for a moment while 
 - **Fire against Frost** locks too when *Fire and frost lock too* is on (the default); off, they cancel particle by
   particle as before. Missiles, arrows, walls, cones and one-shot bolts never lock.
 - A struggle belongs to two casters; each caster is in at most one. Your followers never lock with you.
-- Settings: `[Struggle]`, `[Power]`, `[Aftermath]`, `[Show]` in `Crossfire.ini`, and the menu's **Spell struggles**
-  page, which also has a bar that shows who is pushing while you are locked.
+- **Minimum distance** (`MinDistance`, 50 units by default): casters whose hands are closer do not lock. Enemies close
+  right in during vanilla combat, so it is low.
+- Settings: the menu's **Spell struggles** page holds the everyday ones (and a bar that shows who is pushing while you
+  are locked); every one, the finer tuning too, is in `[Struggle]`, `[Power]`, `[Aftermath]`, `[Show]` of `Crossfire.ini`.
 - Messages: "You overwhelm X.", "X overwhelms you.", "X gives way.", "The spells burst between you."
 
 ## Files

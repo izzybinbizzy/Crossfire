@@ -710,7 +710,7 @@ namespace Crossfire
 						}
 						Core::Place(s, ma, mb, reachA, reachB);
 						const float D = Core::Length(s.muzzleB - s.muzzleA);
-						valid = D >= Core::kKeepGap && Core::InReach(D, s.reachA, s.reachB);
+						valid = D >= Core::KeepGap(sc) && Core::InReach(D, s.reachA, s.reachB);
 					}
 					sight.valid = valid;
 					if (valid) {
@@ -821,7 +821,7 @@ namespace Crossfire
 			const auto ia = gBy.find(a.shooter), ib = gBy.find(b.shooter);
 			const Vec3 ma = MuzzleOf(a.actor, a.source, ia != gBy.end() ? &ia->second : nullptr);
 			const Vec3 mb = MuzzleOf(b.actor, b.source, ib != gBy.end() ? &ib->second : nullptr);
-			if (!Core::Facing(ma, a.dir, mb, b.dir)) {
+			if (!Core::Facing(ma, a.dir, mb, b.dir, sc.minGap)) {
 				gTried.insert(key);
 				return false;
 			}
