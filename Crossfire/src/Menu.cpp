@@ -11,6 +11,7 @@
 #include "Plugin.h"
 
 #include "SKSEMenuFramework.h"
+#include "Translation.h"
 
 namespace Crossfire
 {
@@ -19,6 +20,14 @@ namespace Crossfire
 		// the same warm glow as the RELight - Spell Addon page, so the two sit together
 		constexpr ImGuiMCP::ImVec4 kGold{ 1.0f, 0.86f, 0.55f, 1.0f };
 		constexpr ImGuiMCP::ImVec4 kDim{ 0.75f, 0.72f, 0.66f, 1.0f };
+		using Translation::T;
+#define TR_MARK(x) x  // a line Translation.json carries, though it is not written inside T( ) here
+		// the names Core and Struggle.cpp hand the menu and the bar (their own code stays English: the files read them)
+		[[maybe_unused]] constexpr const char* kShownNames[] = { TR_MARK("Fire"), TR_MARK("Frost"), TR_MARK("Shock"), TR_MARK("Poison"),
+			TR_MARK("Arcane"), TR_MARK("Physical"), TR_MARK("Force"), TR_MARK("Pass"), TR_MARK("Clash"), TR_MARK("Annihilate"),
+			TR_MARK("Wins"), TR_MARK("Loses"), TR_MARK("Alteration"), TR_MARK("Conjuration"), TR_MARK("Destruction"),
+			TR_MARK("Illusion"), TR_MARK("Restoration"), TR_MARK("Level"), TR_MARK("Thu'um") };
+		const char* TS(std::string_view a_english) { return T(std::string(a_english).c_str()); }
 
 		class GlowStyle
 		{
@@ -46,7 +55,7 @@ namespace Crossfire
 		void Heading(const char* a_text)
 		{
 			ImGuiMCP::Spacing();
-			ImGuiMCP::TextColored(kGold, "%s", a_text);
+			ImGuiMCP::TextColored(kGold, "%s", T(a_text));
 			ImGuiMCP::Separator();
 		}
 
@@ -90,22 +99,22 @@ namespace Crossfire
 
 		void Check(Edit& a_e, const char* a_label, bool& a_value, const char* a_tip)
 		{
-			a_e.After(ImGuiMCP::Checkbox(a_label, &a_value));
-			ImGuiMCP::SetItemTooltip("%s", a_tip);
+			a_e.After(ImGuiMCP::Checkbox(T(a_label), &a_value));
+			ImGuiMCP::SetItemTooltip("%s", T(a_tip));
 		}
 
 		void Slider(Edit& a_e, const char* a_label, const char* a_key, float& a_value, const char* a_format, const char* a_tip)
 		{
 			const auto r = Core::RangeOf(a_key);
-			a_e.After(ImGuiMCP::SliderFloat(a_label, &a_value, r.lo, r.hi, a_format, ImGuiMCP::ImGuiSliderFlags_AlwaysClamp));
-			ImGuiMCP::SetItemTooltip("%s", a_tip);
+			a_e.After(ImGuiMCP::SliderFloat(T(a_label), &a_value, r.lo, r.hi, T(a_format), ImGuiMCP::ImGuiSliderFlags_AlwaysClamp));
+			ImGuiMCP::SetItemTooltip("%s", T(a_tip));
 		}
 
 		void SliderI(Edit& a_e, const char* a_label, const char* a_key, int& a_value, const char* a_tip)
 		{
 			const auto r = Core::RangeOf(a_key);
-			a_e.After(ImGuiMCP::SliderInt(a_label, &a_value, static_cast<int>(r.lo), static_cast<int>(r.hi), "%d", ImGuiMCP::ImGuiSliderFlags_AlwaysClamp));
-			ImGuiMCP::SetItemTooltip("%s", a_tip);
+			a_e.After(ImGuiMCP::SliderInt(T(a_label), &a_value, static_cast<int>(r.lo), static_cast<int>(r.hi), "%d", ImGuiMCP::ImGuiSliderFlags_AlwaysClamp));
+			ImGuiMCP::SetItemTooltip("%s", T(a_tip));
 		}
 
 		void DrawTable(const Core::Config& a_cfg)
@@ -115,19 +124,19 @@ namespace Crossfire
 			if (!BeginTable("reactions", kColumns, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
 				return;
 			}
-			TableSetupColumn("vs");
+			TableSetupColumn(T("vs"));
 			for (std::size_t j = 0; j < Core::kElements; ++j) {
-				TableSetupColumn(std::string(Core::ElementName(static_cast<Core::Element>(j))).c_str());
+				TableSetupColumn(TS(Core::ElementName(static_cast<Core::Element>(j))));
 			}
 			TableHeadersRow();
 			for (std::size_t i = 0; i < Core::kElements; ++i) {
 				TableNextRow();
 				TableNextColumn();
-				TextColored(kGold, "%s", std::string(Core::ElementName(static_cast<Core::Element>(i))).c_str());
+				TextColored(kGold, "%s", TS(Core::ElementName(static_cast<Core::Element>(i))));
 				for (std::size_t j = 0; j < Core::kElements; ++j) {
 					TableNextColumn();
 					const auto action = a_cfg.reactions[i][j];
-					const auto name = std::string(Core::ActionName(action));
+					const std::string name = TS(Core::ActionName(action));
 					if (action == Core::Action::kClash) {
 						TextColored(kDim, "%s", name.c_str());
 					} else {
@@ -150,9 +159,9 @@ namespace Crossfire
 
 			Heading("Who clashes");
 			{
-				const char* who[]{ "Everyone's projectiles", "Only when yours are involved" };
-				e.After(ImGuiMCP::Combo("Projectiles", &c.who, who, 2));
-				ImGuiMCP::SetItemTooltip("%s", "Everyone: two enemy mages' spells can meet too. Yours only: a clash always involves one of your projectiles.");
+				const char* who[]{ T("Everyone's projectiles"), T("Only when yours are involved") };
+				e.After(ImGuiMCP::Combo(T("Projectiles"), &c.who, who, 2));
+				ImGuiMCP::SetItemTooltip("%s", T("Everyone: two enemy mages' spells can meet too. Yours only: a clash always involves one of your projectiles."));
 			}
 			Check(e, "Allies pass through", c.ignoreAllies, "Projectiles of people who are not hostile to each other (you and your follower) never clash.");
 
@@ -169,7 +178,7 @@ namespace Crossfire
 			ImGuiMCP::BeginDisabled(!c.explosions);
 			Check(e, "Only harmless bursts", c.safeExplosionsOnly, "Skip a burst that would do more than show: damage, an enchantment, something it spawns. Spells' own explosions only show.");
 			Check(e, "Stand-in bursts", c.standInBursts,
-				"A spell with no explosion of its own (Firebolt, Ice Spike, Lightning Bolt) bursts the way its element's spells do, so every clash shows.");
+				T("A spell with no explosion of its own (Firebolt, Ice Spike, Lightning Bolt) bursts the way its element's spells do, so every clash shows."));
 			Slider(e, "Burst size", "BurstScale", c.burstScale, "x%.1f", "How big a clash's burst is.");
 			ImGuiMCP::EndDisabled();
 			Slider(e, "Skill experience", "SkillXP", c.skillXP, "%.0f", "For each enemy projectile one of yours destroys, to the skill that cast it (Archery for arrows). 0: none.");
@@ -177,24 +186,24 @@ namespace Crossfire
 			ImGuiMCP::EndDisabled();
 
 			Heading("What meets what");
-			ImGuiMCP::TextDisabled("%s", "Row against column. Clash: the stronger wins if it is enough stronger, else both go. Edit Crossfire_Rules.ini to change.");
+			ImGuiMCP::TextDisabled("%s", T("Row against column. Clash: the stronger wins if it is enough stronger, else both go. Edit Crossfire_Rules.ini to change."));
 			DrawTable(c);
-			if (ImGuiMCP::Button("Reload the files")) {
+			if (ImGuiMCP::Button(T("Reload the files"))) {
 				ReloadSoon();
 			}
-			ImGuiMCP::SetItemTooltip("%s", "Read Crossfire_Rules.ini, the Crossfire folder and Crossfire.ini again.");
+			ImGuiMCP::SetItemTooltip("%s", T("Read Crossfire_Rules.ini, the Crossfire folder and Crossfire.ini again."));
 
 			Heading("This session");
 			Check(e, "Log every clash", c.debugLog, "Write each clash to Crossfire.log (Documents\\My Games\\Skyrim Special Edition\\SKSE).");
 			auto& s = Counters();
-			ImGuiMCP::TextDisabled("%u projectile(s) in range now; %llu clash(es), %llu destroyed, %llu weakened, %llu burst(s), %llu by you",
+			ImGuiMCP::TextDisabled(T("%u projectile(s) in range now; %llu clash(es), %llu destroyed, %llu weakened, %llu burst(s), %llu by you"),
 				s.tracked.load(), static_cast<unsigned long long>(s.clashes.load()), static_cast<unsigned long long>(s.destroyed.load()),
 				static_cast<unsigned long long>(s.weakened.load()), static_cast<unsigned long long>(s.explosions.load()),
 				static_cast<unsigned long long>(s.yours.load()));
 			for (const auto& note : LoadNotes()) {
 				ImGuiMCP::TextDisabled("%s", note.c_str());
 			}
-			ImGuiMCP::TextDisabled("%s", "Finer tuning (range, sizes, strengths, burst limits) lives in Crossfire.ini.");
+			ImGuiMCP::TextDisabled("%s", T("Finer tuning (range, sizes, strengths, burst limits) lives in Crossfire.ini."));
 		}
 
 		// when "Preview the bar" was pressed (ImGui time, render thread only); the bar shows a made-up struggle for kPreview seconds
@@ -273,10 +282,10 @@ namespace Crossfire
 			Check(e, "Show skill numbers", s.barSkills, "Both magic skills under the bar.");
 			Slider(e, "Bar position", "BarHeight", s.barHeight, "%.0f%%", "How far down the screen the bar sits.");
 			Slider(e, "Bar size", "BarScale", s.barScale, "x%.2f", "How big the bar is.");
-			if (ImGuiMCP::Button("Preview the bar")) {
+			if (ImGuiMCP::Button(T("Preview the bar"))) {
 				gPreviewFrom = ImGuiMCP::GetTime();
 			}
-			ImGuiMCP::SetItemTooltip("%s", "Shows the bar for a few seconds, as a struggle of fire against frost, so you can see its place and size.");
+			ImGuiMCP::SetItemTooltip("%s", T("Shows the bar for a few seconds, as a struggle of fire against frost, so you can see its place and size."));
 			ImGuiMCP::EndDisabled();
 
 			ImGuiMCP::EndDisabled();
@@ -284,22 +293,22 @@ namespace Crossfire
 			Heading("Now");
 			const auto v = StruggleNow();
 			if (v.active) {
-				ImGuiMCP::Text("Locked with %s: %s %d against %d, %.1f s, the lock %s", v.foe, v.school, v.mySkill, v.theirSkill, v.seconds,
-					v.balance > 0.02f ? "moving toward them" : (v.balance < -0.02f ? "moving toward you" : "even"));
+				ImGuiMCP::Text(T("Locked with %s: %s %d against %d, %.1f s, the lock %s"), v.foe, T(v.school), v.mySkill, v.theirSkill, v.seconds,
+					v.balance > 0.02f ? T("moving toward them") : (v.balance < -0.02f ? T("moving toward you") : T("even")));
 			} else {
-				ImGuiMCP::TextDisabled("%s", "Not locked with anyone.");
+				ImGuiMCP::TextDisabled("%s", T("Not locked with anyone."));
 			}
 			auto& n = Counters();
-			ImGuiMCP::TextDisabled("This session: %llu struggle(s), %llu broken through, %llu won and %llu lost by you, %llu gave way, %llu draw(s)",
+			ImGuiMCP::TextDisabled(T("This session: %llu struggle(s), %llu broken through, %llu won and %llu lost by you, %llu gave way, %llu draw(s)"),
 				static_cast<unsigned long long>(n.struggles.load()), static_cast<unsigned long long>(n.overwhelms.load()),
 				static_cast<unsigned long long>(n.won.load()), static_cast<unsigned long long>(n.lost.load()),
 				static_cast<unsigned long long>(n.gaveWay.load()), static_cast<unsigned long long>(n.draws.load()));
-			if (ImGuiMCP::Button("Struggle defaults")) {
+			if (ImGuiMCP::Button(T("Struggle defaults"))) {
 				s = {};
 				e.changed = e.save = true;
 			}
-			ImGuiMCP::SetItemTooltip("%s", "Every struggle setting back to how it came, the ones in Crossfire.ini too.");
-			ImGuiMCP::TextDisabled("%s", "Finer tuning (skill, level and spell weights, magicka, surges, reeling, camera shake) lives in Crossfire.ini.");
+			ImGuiMCP::SetItemTooltip("%s", T("Every struggle setting back to how it came, the ones in Crossfire.ini too."));
+			ImGuiMCP::TextDisabled("%s", T("Finer tuning (skill, level and spell weights, magicka, surges, reeling, camera shake) lives in Crossfire.ini."));
 		}
 
 		// a spell's sigil for the struggle bar: a ring in the element's colour with its mark inside
@@ -371,7 +380,7 @@ namespace Crossfire
 				v.theirSkill = 64;
 				std::snprintf(v.school, sizeof(v.school), "%s", "Destruction");
 				std::snprintf(v.theirSchool, sizeof(v.theirSchool), "%s", "Destruction");
-				std::snprintf(v.foe, sizeof(v.foe), "%s", "Bandit Mage");
+				std::snprintf(v.foe, sizeof(v.foe), "%s", T("Bandit Mage"));
 			}
 			auto*        io = GetIO();
 			if (!io) {
@@ -442,13 +451,18 @@ namespace Crossfire
 					ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
 				}
 				const float size = fs * 1.15f * k;
-				label("YOU", size, yc - h * 1.6f - size - 4.0f * k, false, col(0.91f, 0.88f, 0.80f, 1.0f));
+				char you[64];
+				std::snprintf(you, sizeof(you), "%s", T("You"));
+				for (auto& ch : you) {
+					ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+				}
+				label(you, size, yc - h * 1.6f - size - 4.0f * k, false, col(0.91f, 0.88f, 0.80f, 1.0f));
 				label(foe, size, yc - h * 1.6f - size - 4.0f * k, true, col(0.91f, 0.88f, 0.80f, 1.0f));
 			}
 			if (v.barSkills) {
 				char mine[32], theirs[32];
-				std::snprintf(mine, sizeof(mine), "%s %d", v.school, v.mySkill);
-				std::snprintf(theirs, sizeof(theirs), "%s %d", v.theirSchool, v.theirSkill);
+				std::snprintf(mine, sizeof(mine), "%s %d", T(v.school), v.mySkill);
+				std::snprintf(theirs, sizeof(theirs), "%s %d", T(v.theirSchool), v.theirSkill);
 				for (auto* t : { mine, theirs }) {
 					for (; *t; ++t) {
 						*t = static_cast<char>(std::toupper(static_cast<unsigned char>(*t)));
@@ -469,9 +483,9 @@ namespace Crossfire
 			SKSE::log::info("SKSE Menu Framework is not installed, so there is no settings page; Crossfire.ini still applies");
 			return;
 		}
-		SKSEMenuFramework::SetSection("Crossfire");
-		SKSEMenuFramework::AddSectionItem("Settings", Render);
-		SKSEMenuFramework::AddSectionItem("Spell struggles", RenderStruggles);
+		SKSEMenuFramework::SetSection(T("Crossfire"));
+		SKSEMenuFramework::AddSectionItem(T("Settings"), Render);
+		SKSEMenuFramework::AddSectionItem(T("Spell struggles"), RenderStruggles);
 		SKSEMenuFramework::AddHudElement(DrawStruggleBar);
 		SKSE::log::info("settings page added to SKSE Menu Framework {}", SKSEMenuFramework::GetMenuFrameworkVersion());
 	}

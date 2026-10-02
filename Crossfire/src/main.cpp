@@ -23,6 +23,7 @@
 //   Plugin.h        what the files share      PCH.h  what they all include
 
 #include "Plugin.h"
+#include "Translation.h"
 
 namespace
 {
@@ -66,6 +67,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 			Crossfire::FindStandInBursts();
 			Crossfire::FindClashArt();
 			Install();
+			SKSE::log::info("{}", Translation::Load("Data/SKSE/Plugins/Crossfire/Translation.json"));
 			Crossfire::RegisterMenu();
 			break;
 		case SKSE::MessagingInterface::kPreLoadGame:

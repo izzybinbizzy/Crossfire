@@ -10,6 +10,7 @@
 // pushed back, and a breakthrough breaks the loser's cast, staggers and hurts them.
 
 #include "Plugin.h"
+#include "Translation.h"
 
 #include "CrossfireAPI.h"
 
@@ -450,9 +451,9 @@ namespace Crossfire
 				gs.lost.fetch_add(1, std::memory_order_relaxed);
 			}
 			if (W.player) {  // 9
-				Message(std::format("You overwhelm {}.", L.name), a_cfg);
+				Message(Translation::Fill(Translation::T("You overwhelm {}."), L.name), a_cfg);
 			} else if (L.player) {
-				Message(std::format("{} overwhelms you.", W.name), a_cfg);
+				Message(Translation::Fill(Translation::T("{} overwhelms you."), W.name), a_cfg);
 			}
 			const Vec3 at = a_front.valid ? a_front.point : Core::Lerp(a_s.muzzleA, a_s.muzzleB, 0.5f);  // 10
 			Shake(1.0f, at, 0.6f, a_cfg);
@@ -480,7 +481,7 @@ namespace Crossfire
 					const SideRec& stopped = a_aWon ? a_r.b : a_r.a;
 					const SideRec& other = a_aWon ? a_r.a : a_r.b;
 					if (other.player && !stopped.player) {
-						Message(std::format("{} gives way.", stopped.name), a_cfg);
+						Message(Translation::Fill(Translation::T("{} gives way."), stopped.name), a_cfg);
 					}
 					BurstFor(a_s.a, a_s.b, at, key, a_cfg);
 					Shake(0.3f, at, 0.3f, a_cfg);
@@ -502,7 +503,7 @@ namespace Crossfire
 						BreakCast(actor, *side, a_cfg);
 					}
 					if (a_r.a.player || a_r.b.player) {
-						Message("The spells burst between you.", a_cfg);
+						Message(Translation::T("The spells burst between you."), a_cfg);
 					}
 					Tell(3, a_s, a_r, at, 0, a_cfg);
 					break;

@@ -68,11 +68,12 @@ jobs:
           if (Test-Path $pdb) { Copy-Item $pdb $stage }
           Copy-Item data/SKSE/Plugins/Crossfire_Rules.ini $stage
           Copy-Item data/SKSE/Plugins/Crossfire/README.txt "$stage/Crossfire"
+          Copy-Item data/SKSE/Plugins/Crossfire/Translation.json "$stage/Crossfire"
           Compress-Archive -Path package/SKSE -DestinationPath Crossfire.zip -Force
           # read the zip back: exactly the files the mod needs, and never Crossfire.ini (the menu writes that)
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $entries = [IO.Compression.ZipFile]::OpenRead((Resolve-Path Crossfire.zip)).Entries | ForEach-Object { $_.FullName -replace '\\', '/' }
-          foreach ($need in 'SKSE/Plugins/Crossfire.dll', 'SKSE/Plugins/Crossfire_Rules.ini', 'SKSE/Plugins/Crossfire/README.txt') {
+          foreach ($need in 'SKSE/Plugins/Crossfire.dll', 'SKSE/Plugins/Crossfire_Rules.ini', 'SKSE/Plugins/Crossfire/README.txt', 'SKSE/Plugins/Crossfire/Translation.json') {
             if ($entries -notcontains $need) { throw "Crossfire.zip is missing $need (has: $($entries -join ', '))" }
           }
           if ($entries -match 'Crossfire\.ini$') { throw "Crossfire.zip ships Crossfire.ini" }
