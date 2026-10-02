@@ -330,6 +330,7 @@ namespace Crossfire
 		gBodies.clear();
 		gContacts.clear();
 		gStreams.clear();
+		ClearInfo();  // keyed by form addresses: a spell or enchantment made in play is freed with its game
 		Struggles::Reset(false);  // the handles it holds belong to the world that went away
 		gBursts = {};
 		gXP = {};
