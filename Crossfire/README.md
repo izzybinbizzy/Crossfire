@@ -12,6 +12,10 @@ nothing on Nexus brings it back. With Crossfire:
 - **Two sprays meet** (Flames against Frostbite): each particle clashes, so the two streams stop where they meet.
 - **Unrelenting Force** swats every projectile in its cone out of the air. A lightning bolt zaps what it crosses.
   A wall of frost stops fire flying through it.
+- **Two lightning bolts that cross** burst between the casters and both go. A fired bolt still counts for a moment
+  after it fades (`BoltLinger`, 0.3 s), so the two need not be cast in the same instant.
+- **Every clash shows**: a spell with no explosion of its own (Firebolt, Ice Spike, Lightning Bolt) bursts the way its
+  element's spells do (`StandInBursts`), and `BurstScale` sets how big a clash's burst is.
 - Enemy mages' spells meet each other too, and your followers' spells pass through yours.
 - Destroying an enemy's projectile with one of yours earns skill experience (Destruction for a spell, Archery for an
   arrow).
@@ -56,7 +60,7 @@ stagger, take an extra hit (credited to the winner) and reel for a moment while 
 - **Minimum distance** (`MinDistance`, 50 units by default): casters whose hands are closer do not lock. Enemies close
   right in during vanilla combat, so it is low.
 - Settings: the menu's **Spell struggles** page holds the everyday ones (and a bar that shows who is pushing while you
-  are locked); every one, the finer tuning too, is in `[Struggle]`, `[Power]`, `[Aftermath]`, `[Show]` of `Crossfire.ini`.
+  are locked, in each spell's colour with its sigil; names and skill numbers are two switches, both off by default); every one, the finer tuning too, is in `[Struggle]`, `[Power]`, `[Aftermath]`, `[Show]` of `Crossfire.ini`.
 - Messages: "You overwhelm X.", "X overwhelms you.", "X gives way.", "The spells burst between you."
 
 ## Files
@@ -72,6 +76,10 @@ stagger, take an extra hit (credited to the winner) and reel for a moment while 
 They are read in that order, each on top of the last. A line a file cannot use is skipped and written to
 `Crossfire.log`, with its line number. The menu has a Reload button.
 
+**Clash art (optional):** a mesh at `Data\meshes\Crossfire\Clash<Element>.nif` (`ClashFire`, `ClashFrost`, `ClashShock`,
+`ClashPoison`, `ClashArcane`, `ClashPhysical`, `ClashForce`), loose or in an archive, plays for two seconds where two
+projectiles meet, on top of the burst, at `BurstScale`. Crossfire ships none; the log lists the ones it found.
+
 ## For other mods
 
 - **Papyrus**: the mod event `Crossfire_Clash` (`RegisterForModEvent("Crossfire_Clash", "OnClash")`): `strArg` is
@@ -82,6 +90,8 @@ They are read in that order, each on top of the last. A line a file cannot use i
 - **SKSE plugins**: every clash is dispatched on SKSE's messaging interface as `CrossfireAPI::kClash`, and every
   struggle's start and end as `CrossfireAPI::kStruggle`; see
   `src/CrossfireAPI.h` (copy it; it depends on nothing).
+- **DevBench** (when it is in the load order): `inspect kind=crossfire` returns the session's counters and the struggle
+  the player is in; `menu action=invoke name=crossfire set=previewbar` shows the struggle bar's preview.
 
 ## Source
 

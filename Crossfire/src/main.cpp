@@ -18,6 +18,8 @@
 //   Settings.cpp    the files: Crossfire_Rules.ini, Crossfire\*.ini, Crossfire.ini
 //   Menu.cpp        the settings page, in SKSE Menu Framework's Mod Control Panel
 //   CrossfireAPI.h  what other SKSE plugins are told of each clash
+//   DevBench.cpp    DevBench's view (inspect kind=crossfire) and the bar preview; DevBenchAPI.* is DevBench's own
+//                   MIT-licensed consumer header (DevBenchAPI.LICENSE.txt)
 //   Plugin.h        what the files share      PCH.h  what they all include
 
 #include "Plugin.h"
@@ -54,10 +56,15 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 			return;
 		}
 		switch (a_msg->type) {
+		case SKSE::MessagingInterface::kPostPostLoad:
+			Crossfire::OfferToDevBench();  // after every plugin's load: Crossfire loads before DevBench (2026-10-02 log)
+			break;
 		case SKSE::MessagingInterface::kDataLoaded:
 			Crossfire::LoadSettings();
 			Crossfire::Survey();
 			Crossfire::FindFearSpell();
+			Crossfire::FindStandInBursts();
+			Crossfire::FindClashArt();
 			Install();
 			Crossfire::RegisterMenu();
 			break;

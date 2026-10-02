@@ -57,7 +57,24 @@ namespace Crossfire
 			Vec3                             dir;                // which way it goes this frame
 			float                            radius{ 0.0f };
 			float                            length{ 0.0f };     // a beam's, as drawn
+			bool                             ghost{ false };     // a bolt's line kept after its projectile went (gLinger):
+			                                                     // no ref, never destroyed or changed, only clashes
 		};
+
+		// A one-shot bolt (Lightning Bolt) is a beam that exists for a moment, so two of them, or a bolt and a missile,
+		// almost never share a frame. Its line is kept for BoltLinger seconds after its projectile is gone and still
+		// clashes - as an immune body, the way a live beam does.
+		struct Linger
+		{
+			Core::Body body;
+			Entry      entry;  // with no ref
+			Track      track;
+			double     until{ 0.0 };
+			bool       seen{ false };  // its projectile was alive this frame
+		};
+		std::unordered_map<std::uint32_t, Linger> gLinger;
+
+		[[nodiscard]] bool OneShotBolt(const Info& a_info) { return a_info.kind == Core::Kind::kBeam && a_info.stream == Core::Stream::kNone; }
 
 		Stats gStats;
 
@@ -141,30 +158,95 @@ namespace Crossfire
 			return hostile;
 		}
 
-		// the projectile's own explosion, placed where the two met - before it is killed, while its cell is sure
-		void Burst(RE::Projectile* a_projectile, RE::BGSExplosion* a_explosion, Vec3 a_at)
+		// the burst a destroyed projectile shows: its own explosion when it has one that may be shown, else (StandInBursts)
+		// the one its element's spells use - a Firebolt has none and used to vanish without a trace
+		RE::BGSExplosion* BurstOf(RE::Projectile* a_projectile, const RE::BGSProjectile* a_base, Core::Element a_element, const Core::Config& a_cfg)
 		{
-			auto* data = RE::TESDataHandler::GetSingleton();
-			auto* cell = a_projectile->GetParentCell();
+			auto* own = a_projectile ? ExplosionOf(a_projectile, a_base) : nullptr;  // two bolts' lines: no projectile left
+			if (own && (!a_cfg.safeExplosionsOnly || SafeExplosion(own))) {
+				return own;
+			}
+			return a_cfg.standInBursts ? StandInBurst(a_element) : nullptr;
+		}
+
+		// the burst, placed where the two met - before the projectile is killed, while its cell is sure - at BurstScale.
+		// With no projectile (two bolts' lines), in the player's cell
+		void BurstHere(RE::BGSExplosion* a_explosion, Vec3 a_at, float a_scale, RE::Projectile* a_projectile)
+		{
+			auto*              data = RE::TESDataHandler::GetSingleton();
+			RE::TESObjectREFR* place = a_projectile;
+			if (!place) {
+				place = RE::PlayerCharacter::GetSingleton();
+			}
+			auto* cell = place ? place->GetParentCell() : nullptr;
 			if (!data || !cell || !Core::Finite(a_at)) {
 				return;
 			}
-			const auto handle = data->CreateReferenceAtLocation(a_explosion, N(a_at), a_projectile->GetAngle(), cell,
-				a_projectile->GetWorldspace(), nullptr, nullptr, RE::ObjectRefHandle(), false, true);
-			if (handle) {
+			const auto handle = data->CreateReferenceAtLocation(a_explosion, N(a_at), a_projectile ? a_projectile->GetAngle() : RE::NiPoint3{},
+				cell, place->GetWorldspace(), nullptr, nullptr, RE::ObjectRefHandle(), false, true);
+			if (auto ref = handle.get()) {
+				const float k = std::isfinite(a_scale) ? std::clamp(a_scale, 0.5f, 3.0f) : 1.0f;
+				ref->GetReferenceRuntimeData().refScale = static_cast<std::uint16_t>(std::lround(k * 100.0f));
+				if (auto* x = ref->As<RE::Explosion>()) {
+					auto& xd = x->GetExplosionRuntimeData();
+					if (std::isfinite(xd.radius)) {
+						xd.radius *= k;
+					}
+				}
 				gStats.explosions.fetch_add(1, std::memory_order_relaxed);
 			}
+		}
+
+		// a model played where the two met, for two seconds (the clash art, or a stand-in burst's model)
+		void ModelHere(const char* a_model, Vec3 a_at, float a_scale, RE::Projectile* a_projectile)
+		{
+			const char* model = a_model;
+			RE::TESObjectREFR* place = a_projectile;
+			if (!place) {
+				place = RE::PlayerCharacter::GetSingleton();
+			}
+			auto* cell = place ? place->GetParentCell() : nullptr;
+			if (!model || !cell || !Core::Finite(a_at)) {
+				return;
+			}
+			const float k = std::isfinite(a_scale) ? std::clamp(a_scale, 0.5f, 3.0f) : 1.0f;
+			RE::BSTempEffectParticle::Spawn(cell, 2.0f, model, RE::NiPoint3{}, N(a_at), k, 7, nullptr);
+		}
+
+		void ClashArtHere(Core::Element a_element, Vec3 a_at, float a_scale, RE::Projectile* a_projectile)
+		{
+			ModelHere(ClashArt(a_element), a_at, a_scale, a_projectile);
+		}
+
+		// what a clash shows where a projectile went: its own (or its element's) explosion when it only shows, else its
+		// element's stand-in model, and the clash art. False when there was nothing to show.
+		bool ShowBurst(RE::Projectile* a_p, const RE::BGSProjectile* a_base, Core::Element a_element, Vec3 a_at, std::uint64_t a_pair,
+			const Core::Config& a_cfg)
+		{
+			auto*       explosion = BurstOf(a_p, a_base, a_element, a_cfg);
+			const char* model = !explosion && a_cfg.standInBursts ? StandInModel(a_element) : nullptr;
+			const char* art = ClashArt(a_element);
+			if ((!explosion && !model && !art) || !gBursts.Allow(a_pair)) {
+				return false;
+			}
+			if (explosion) {
+				BurstHere(explosion, a_at, a_cfg.burstScale, a_p);
+			} else if (model) {
+				ModelHere(model, a_at, a_cfg.burstScale, a_p);
+			}
+			ClashArtHere(a_element, a_at, a_cfg.burstScale, a_p);
+			return true;
 		}
 
 		void Settle(Entry& a_e, bool a_kill, float a_before, float a_after, Vec3 a_at, std::uint64_t a_pair, const Core::Config& a_cfg)
 		{
 			auto* p = a_e.ref.get();
+			if (a_e.ghost || !p) {
+				return;  // a bolt's line kept after its projectile went: immune, nothing to change
+			}
 			if (a_kill) {
 				if (a_cfg.explosions) {
-					if (auto* explosion = ExplosionOf(p, a_e.base); explosion && (!a_cfg.safeExplosionsOnly || SafeExplosion(explosion)) &&
-																	  gBursts.Allow(a_pair)) {
-						Burst(p, explosion, a_at);
-					}
+					ShowBurst(p, a_e.base, a_e.info.element, a_at, a_pair, a_cfg);
 				}
 				p->Kill();
 				a_e.killed = true;
@@ -242,6 +324,7 @@ namespace Crossfire
 		gKilled.clear();
 		gHostile.clear();
 		gSettled.clear();
+		gLinger.clear();
 		gHandles.clear();
 		gEntries.clear();
 		gBodies.clear();
@@ -350,6 +433,22 @@ namespace Crossfire
 			switch (info.shape) {
 			case Core::Shape::kSphere:
 				{
+					if (info.kind == Core::Kind::kStream) {
+						// a held spray (Flames, Frostbite, a breath) is ONE long-lived projectile that sits at the caster's hand
+						// and turns with the aim - measured in game, 2026-10-01: a single Flames projectile lived 19 s and moved
+						// only as its caster did. As a ball at the hand it met nothing: two casters' streams never touched, so no
+						// struggle ever began, and "has hit something" or "is not moving" (the tests below, right for a missile)
+						// dropped it exactly while it was burning its target. Its body is the stream itself: from the hand
+						// along its aim for its reach, ending where it hits, like a held beam.
+						const auto angle = p->GetAngle();
+						b.shape = Core::Shape::kBeam;
+						b.immune = true;  // an arrow crossing it does not put the spell out
+						b.from = now;
+						b.to = now + Core::DirectionFromAngles(angle.x, angle.z) * BeamLength(rd, base, now);
+						b.radius = radius(base->data.collisionRadius);
+						dir = Unit(b.to - b.from);
+						break;
+					}
 					// one that has already hit something, or lies still (an arrow stuck in a wall, a lobbed spell resting
 					// on the ground), is done flying. Not moving is the test that cannot be wrong; the impact list is only
 					// a quicker answer for one that hit this frame. (A missile's very first frame, before it has moved,
@@ -411,12 +510,43 @@ namespace Crossfire
 			e.ref = std::move(ref);
 			e.base = base;
 			e.info = info;
+			e.info.immune = b.immune;  // a held stream is immune here, whatever its record's kind says
 			e.track = &track;
 			e.now = now;
 			e.handle = native;
 			b.shooter = e.shooter;
 			gEntries.push_back(std::move(e));
 			gBodies.push_back(b);
+		}
+		// the bolts: remember each live one's line; a line whose projectile has gone clashes on until BoltLinger runs out
+		for (auto& [h, l] : gLinger) {
+			l.seen = false;
+		}
+		if (cfg.boltLinger > 0.0f) {
+			for (std::size_t i = 0; i < gEntries.size(); ++i) {
+				const auto& e = gEntries[i];
+				if (!OneShotBolt(e.info)) {
+					continue;
+				}
+				auto& l = gLinger[e.handle];
+				l.body = gBodies[i];
+				l.entry = e;
+				l.entry.ref.reset();
+				l.entry.ghost = true;
+				l.track = *e.track;
+				l.until = gClock + static_cast<double>(cfg.boltLinger);
+				l.seen = true;
+			}
+		}
+		std::erase_if(gLinger, [](const auto& a_kv) { return !a_kv.second.seen && a_kv.second.until < gClock; });
+		for (auto& [h, l] : gLinger) {
+			if (l.seen || gKilled.contains(h)) {
+				continue;
+			}
+			Entry e = l.entry;
+			e.track = &l.track;
+			gEntries.push_back(std::move(e));
+			gBodies.push_back(l.body);
 		}
 		gStats.tracked.store(static_cast<std::uint32_t>(gEntries.size()), std::memory_order_relaxed);
 
@@ -457,6 +587,11 @@ namespace Crossfire
 		if (cfg.debugLog && gFrame % 300 == 0 && !gEntries.empty()) {
 			SKSE::log::info("pass: {} projectile(s) in range, {} of them lockable stream(s), {} handle(s) in the manager", gEntries.size(),
 				gStreams.size(), gHandles.size());
+			for (const auto& st : gStreams) {
+				SKSE::log::info("  stream: {}{:08X} from ({:.0f}, {:.0f}, {:.0f}) aim ({:.2f}, {:.2f}, {:.2f}) length {:.0f} radius {:.0f}",
+					st.player ? "yours " : "", st.base ? st.base->GetFormID() : 0, st.now.x, st.now.y, st.now.z, st.dir.x, st.dir.y, st.dir.z, st.length,
+					st.radius);
+			}
 		}
 
 		if (gEntries.size() >= 2) {
@@ -494,6 +629,33 @@ namespace Crossfire
 				Struggles::TryBegin(gStreams[a.stream], gStreams[b.stream], c.touch.point, cfg)) {
 				continue;  // they locked (or already are): the struggle settles it, not a clash
 			}
+			if (cfg.boltsMeet && OneShotBolt(a.info) && OneShotBolt(b.info)) {
+				// two bolts crossing: both are immune beams, which never clash by the table - they burst between them and
+				// both go (a line kept after its projectile went only bursts)
+				gStats.clashes.fetch_add(1, std::memory_order_relaxed);
+				gSettled.insert(meeting);
+				const auto    pair = PairKey(a.shooter, b.shooter);
+				Core::Outcome o{ true, !a.ghost, !b.ghost, a.track->strength, b.track->strength };
+				if (cfg.debugLog) {
+					SKSE::log::info("bolts meet: {:08X}{}{} vs {:08X}{}{} at ({:.0f}, {:.0f}, {:.0f})", a.base->GetFormID(), a.player ? " (yours)" : "",
+						a.ghost ? " (line)" : "", b.base->GetFormID(), b.player ? " (yours)" : "", b.ghost ? " (line)" : "", c.touch.point.x,
+						c.touch.point.y, c.touch.point.z);
+				}
+				Tell(a, b, o, c.touch.point, pair, cfg);
+				if (cfg.explosions) {
+					Entry* live = !a.ghost && a.ref ? &a : (!b.ghost && b.ref ? &b : nullptr);
+					ShowBurst(live ? live->ref.get() : nullptr, live ? live->base : a.base, a.info.element, c.touch.point, pair, cfg);
+				}
+				for (Entry* x : { &a, &b }) {
+					if (!x->ghost && x->ref) {
+						x->ref->Kill();
+						x->killed = true;
+						gKilled.insert_or_assign(x->handle, gClock);
+						gStats.destroyed.fetch_add(1, std::memory_order_relaxed);
+					}
+				}
+				continue;
+			}
 			const float sa = a.track->strength, sb = b.track->strength;
 			const auto  o = Core::Resolve(cfg.reactions, cfg.overpowerRatio, cfg.weakenSurvivor, a.info.element, sa, a.info.immune,
                 b.info.element, sb, b.info.immune);
@@ -525,7 +687,8 @@ namespace Crossfire
 			}
 		}
 		std::erase_if(gSettled, [](std::uint64_t a_pair) {
-			return !gTracks.contains(static_cast<std::uint32_t>(a_pair >> 32)) || !gTracks.contains(static_cast<std::uint32_t>(a_pair));
+			const auto known = [](std::uint32_t h) { return gTracks.contains(h) || gLinger.contains(h); };
+			return !known(static_cast<std::uint32_t>(a_pair >> 32)) || !known(static_cast<std::uint32_t>(a_pair));
 		});
 		gEntries.clear();
 		gStreams.clear();
@@ -538,7 +701,7 @@ namespace Crossfire
 			return;
 		}
 		auto& e = gEntries[a_entry];
-		if (e.killed) {
+		if (e.killed || e.ghost || !e.ref) {
 			return;
 		}
 		e.ref->Kill();
@@ -554,11 +717,9 @@ namespace Crossfire
 		}
 		auto& e = gEntries[a_entry];
 		auto* p = e.ref.get();
-		auto* explosion = ExplosionOf(p, e.base);
-		if (!explosion || (a_config.safeExplosionsOnly && !SafeExplosion(explosion)) || !gBursts.Allow(a_pair)) {
+		if (!p) {
 			return false;
 		}
-		Burst(p, explosion, a_at);
-		return true;
+		return ShowBurst(p, e.base, e.info.element, a_at, a_pair, a_config);
 	}
 }

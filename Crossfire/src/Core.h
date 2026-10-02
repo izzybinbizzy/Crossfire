@@ -555,6 +555,8 @@ namespace Crossfire::Core
 		float barHeight{ 82.0f };  // percent of the way down the screen
 		float barScale{ 1.0f };
 		float barOpacity{ 0.9f };
+		bool  barNames{ false };   // the two names over the bar
+		bool  barSkills{ false };  // both magic skills under it
 	};
 
 	struct Config
@@ -574,10 +576,14 @@ namespace Crossfire::Core
 		float  overpowerRatio{ 2.0f };
 		bool   weakenSurvivor{ true };
 		bool   weakenDamage{ true };  // a weakened projectile also does less when it lands
+		bool   boltsMeet{ true };     // two one-shot bolts (Lightning Bolt) that cross burst and both go
+		float  boltLinger{ 0.3f };    // seconds a fired bolt's line still clashes after its projectile is gone
 		Tuning tuning;
 		// [Effects]
 		bool  explosions{ true };
 		bool  safeExplosionsOnly{ true };  // skip an explosion that would do anything but show (damage, enchantment, spawns)
+		bool  standInBursts{ true };       // a spell with no burst of its own (Firebolt) bursts as its element's spells do
+		float burstScale{ 1.5f };          // how big a clash's burst is
 		int   maxExplosionsPerFrame{ 4 };
 		float explosionCooldown{ 0.12f };
 		int   maxContactsPerFrame{ 32 };

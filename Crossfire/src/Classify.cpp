@@ -244,6 +244,90 @@ namespace Crossfire
 	namespace
 	{
 		RE::SpellItem* gFear = nullptr;
+		std::array<RE::BGSExplosion*, Core::kElements> gStandIn{};
+		std::array<std::string, Core::kElements>       gClashArt{};  // meshes\Crossfire\Clash<Element>.nif, when there is one
+	}
+
+	// For each element, the burst a clash shows for a spell that has none of its own (Firebolt, Ice Spike, Lightning
+	// Bolt): the explosion of the costliest aimed spell of that element. Skyrim.esm's own spells first, so the look is the
+	// game's; any plugin's when the game has none. Most spell explosions carry the spell's harm (82 of 102 in his order),
+	// so one that does is shown by its MODEL only (StandInModel) - a visual, never the explosion itself.
+	// ⛔ PAID FOR 2026-10-02: a runtime copy of the explosion with the harm taken out (IFormFactory::Create) crashed the
+	// game a few seconds after every load (0xc0000409 in ucrtbase, no crash log) - no forms are made at run time.
+	void FindStandInBursts()
+	{
+		gStandIn = {};
+		auto* data = RE::TESDataHandler::GetSingleton();
+		if (!data) {
+			return;
+		}
+		std::array<float, Core::kElements> best{};
+		std::array<bool, Core::kElements>  vanilla{};
+		for (auto* s : data->GetFormArray<RE::SpellItem>()) {
+			if (!s || s->GetSpellType() != RE::MagicSystem::SpellType::kSpell || s->GetDelivery() != RE::MagicSystem::Delivery::kAimed) {
+				continue;
+			}
+			const auto* effect = MainEffect(s);
+			const auto* proj = effect ? effect->data.projectileBase : nullptr;
+			if (!proj || !proj->data.flags.any(RE::BGSProjectileData::BGSProjectileFlags::kExplosion) || !proj->data.explosionType ||
+				!Hostile(s, effect)) {
+				continue;
+			}
+			const auto e = static_cast<std::size_t>(ElementOf(effect, false, false));
+			if (e >= Core::kElements) {
+				continue;
+			}
+			const bool  fromGame = (s->GetFormID() >> 24) == 0;
+			const float cost = CostOf(s);
+			if ((fromGame && !vanilla[e]) || (fromGame == vanilla[e] && cost > best[e])) {
+				gStandIn[e] = proj->data.explosionType;
+				best[e] = cost;
+				vanilla[e] = fromGame;
+			}
+		}
+		for (std::size_t e = 0; e < Core::kElements; ++e) {
+			const auto* src = gStandIn[e];
+			SKSE::log::info("stand-in burst for {}: {}", Core::ElementName(static_cast<Core::Element>(e)),
+				src ? std::format("{:08X} ({}){}", src->GetFormID(), src->GetModel() ? src->GetModel() : "",
+						  SafeExplosion(src) ? "" : ", its model only (the explosion carries harm)") :
+					  std::string("none"));
+		}
+	}
+
+	// Clash art: a mesh at `meshes\Crossfire\Clash<Element>.nif` (loose or in an archive) plays where two projectiles meet,
+	// on top of the burst - Crossfire ships none; a mesh made later (NifSkope) is picked up with no code change
+	void FindClashArt()
+	{
+		for (std::size_t e = 0; e < Core::kElements; ++e) {
+			const auto name = std::format("Crossfire\\Clash{}.nif", Core::ElementName(static_cast<Core::Element>(e)));
+			RE::BSResourceNiBinaryStream stream("meshes\\" + name);
+			gClashArt[e] = stream.good() ? name : std::string();
+			if (!gClashArt[e].empty()) {
+				SKSE::log::info("clash art for {}: meshes\\{}", Core::ElementName(static_cast<Core::Element>(e)), name);
+			}
+		}
+	}
+
+	const char* ClashArt(Core::Element a_element)
+	{
+		const auto e = static_cast<std::size_t>(a_element);
+		return e < gClashArt.size() && !gClashArt[e].empty() ? gClashArt[e].c_str() : nullptr;
+	}
+
+	RE::BGSExplosion* StandInBurst(Core::Element a_element)
+	{
+		const auto e = static_cast<std::size_t>(a_element);
+		return e < gStandIn.size() && SafeExplosion(gStandIn[e]) ? gStandIn[e] : nullptr;
+	}
+
+	const char* StandInModel(Core::Element a_element)
+	{
+		const auto e = static_cast<std::size_t>(a_element);
+		if (e >= gStandIn.size() || !gStandIn[e] || SafeExplosion(gStandIn[e])) {
+			return nullptr;
+		}
+		const char* m = gStandIn[e]->GetModel();
+		return m && *m ? m : nullptr;
 	}
 
 	// the cheapest of Skyrim.esm's own aimed Illusion fear spells (Fear itself), for "Winning scares weaker enemies"

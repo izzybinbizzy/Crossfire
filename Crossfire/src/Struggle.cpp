@@ -583,6 +583,8 @@ namespace Crossfire
 			v.barHeight = sc.barHeight;
 			v.barScale = sc.barScale;
 			v.barOpacity = sc.barOpacity;
+			v.barNames = sc.barNames;
+			v.barSkills = sc.barSkills;
 			auto* player = RE::PlayerCharacter::GetSingleton();
 			const auto me = player ? player->GetHandle().native_handle() : 0;
 			for (const auto& [key, s] : gBook) {
@@ -619,6 +621,7 @@ namespace Crossfire
 				v.mySkill = skillOf(actorMe.get(), mine);
 				v.theirSkill = skillOf(actorThem.get(), theirs);
 				std::snprintf(v.school, sizeof(v.school), "%s", mine.breath ? "Thu'um" : SchoolName(SchoolIndex(mine.leading.skill)));
+				std::snprintf(v.theirSchool, sizeof(v.theirSchool), "%s", theirs.breath ? "Thu'um" : SchoolName(SchoolIndex(theirs.leading.skill)));
 				std::snprintf(v.foe, sizeof(v.foe), "%s", theirs.name.c_str());
 				break;
 			}

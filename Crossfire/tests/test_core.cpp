@@ -644,6 +644,10 @@ namespace
 			c.tuning.minSpellStrength = u(g) * 1000;
 			c.explosions = u(g) < 0.5f;
 			c.safeExplosionsOnly = u(g) < 0.5f;
+			c.standInBursts = u(g) < 0.5f;
+			c.boltsMeet = u(g) < 0.5f;
+			c.boltLinger = u(g);
+			c.burstScale = 0.5f + u(g) * 2.5f;
 			c.maxExplosionsPerFrame = static_cast<int>(u(g) * 32);
 			c.explosionCooldown = u(g) * 5;
 			c.maxContactsPerFrame = 1 + static_cast<int>(u(g) * 511);
@@ -694,6 +698,8 @@ namespace
 			k.barHeight = u(g) * 100;
 			k.barScale = 0.5f + u(g) * 1.5f;
 			k.barOpacity = 0.1f + u(g) * 0.9f;
+			k.barNames = u(g) < 0.5f;
+			k.barSkills = u(g) < 0.5f;
 			Config back;
 			ParseIni(WriteSettings(c), back, w);
 			CHECK(w.empty());
@@ -710,7 +716,7 @@ namespace
 				  kb.staggerStrength == k.staggerStrength && kb.overwhelmDamage == k.overwhelmDamage && kb.finishers == k.finishers &&
 				  kb.finisherForce == k.finisherForce && kb.intimidate == k.intimidate && kb.xp == k.xp && kb.messages == k.messages);
 			CHECK(kb.lockBursts == k.lockBursts && kb.cameraShake == k.cameraShake && kb.bar == k.bar && kb.barHeight == k.barHeight &&
-				  kb.barScale == k.barScale && kb.barOpacity == k.barOpacity);
+				  kb.barScale == k.barScale && kb.barOpacity == k.barOpacity && kb.barNames == k.barNames && kb.barSkills == k.barSkills);
 			CHECK(k.skillSource >= 0 && k.skillSource <= 2);
 			CHECK(back.enabled == c.enabled && back.who == c.who && back.ignoreAllies == c.ignoreAllies && back.maxDistance == c.maxDistance &&
 				  back.radiusScale == c.radiusScale && back.radiusBonus == c.radiusBonus && back.minRadius == c.minRadius &&
@@ -718,7 +724,8 @@ namespace
 				  back.weakenSurvivor == c.weakenSurvivor && back.weakenDamage == c.weakenDamage &&
 				  back.tuning.streamShare == c.tuning.streamShare && back.tuning.arrowScale == c.tuning.arrowScale &&
 				  back.tuning.shoutStrength == c.tuning.shoutStrength && back.tuning.minSpellStrength == c.tuning.minSpellStrength &&
-				  back.explosions == c.explosions && back.safeExplosionsOnly == c.safeExplosionsOnly &&
+				  back.explosions == c.explosions && back.safeExplosionsOnly == c.safeExplosionsOnly && back.standInBursts == c.standInBursts &&
+				  back.burstScale == c.burstScale && back.boltsMeet == c.boltsMeet && back.boltLinger == c.boltLinger &&
 				  back.maxExplosionsPerFrame == c.maxExplosionsPerFrame && back.explosionCooldown == c.explosionCooldown &&
 				  back.maxContactsPerFrame == c.maxContactsPerFrame && back.skillXP == c.skillXP && back.modEvents == c.modEvents &&
 				  back.debugLog == c.debugLog);
@@ -762,7 +769,7 @@ namespace
 			keys.insert(key);
 			++written;
 		}
-		CHECK(written == 68);  // 24 before the struggles, 44 of them
+		CHECK(written == 74);  // 28 before the struggles, 46 of them
 		CHECK(keys.size() == written);
 		const Range push = RangeOf("PushTime"), scale = RangeOf("barscale"), source = RangeOf("SkillSource");
 		CHECK(push.lo == 1.0f && push.hi == 30.0f);

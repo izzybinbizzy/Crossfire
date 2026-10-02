@@ -47,6 +47,11 @@ namespace Crossfire
 	[[nodiscard]] bool              SafeExplosion(const RE::BGSExplosion* a_explosion);
 	void                            Survey();  // once, at data load: logs how many projectiles there are of each kind
 	void                            FindFearSpell();  // once, at data load: the game's own Fear, for Intimidate
+	void                            FindStandInBursts();  // once, at data load: a burst per element for spells with none
+	[[nodiscard]] RE::BGSExplosion* StandInBurst(Core::Element a_element);  // nullptr: none that only shows
+	[[nodiscard]] const char*       StandInModel(Core::Element a_element);  // the model of one that carries harm, or nullptr
+	void                            FindClashArt();  // once, at data load: meshes\Crossfire\Clash<Element>.nif that exist
+	[[nodiscard]] const char*       ClashArt(Core::Element a_element);  // that mesh (under meshes\), or nullptr
 	[[nodiscard]] RE::SpellItem*    FearSpell();      // null when none was found
 
 	// ------------------------------------------------------------------ Clash.cpp: the pass, once a frame
@@ -103,13 +108,18 @@ namespace Crossfire
 		std::uint8_t mine{ 0 }, theirs{ 0 };  // elements
 		int          mySkill{ 0 }, theirSkill{ 0 };
 		bool         myBreath{ false }, theirBreath{ false };
-		char         school[16]{};
+		char         school[16]{}, theirSchool[16]{};
 		char         foe[64]{};
 		bool         bar{ true };
 		float        barHeight{ 82.0f }, barScale{ 1.0f }, barOpacity{ 0.9f };
+		bool         barNames{ false }, barSkills{ false };
 	};
 	[[nodiscard]] StruggleView StruggleNow();
 
 	// ------------------------------------------------------------------ Menu.cpp
 	void RegisterMenu();
+	void RequestBarPreview();  // any thread: the struggle bar shows its preview from the next frame
+
+	// ------------------------------------------------------------------ DevBench.cpp
+	void OfferToDevBench();
 }

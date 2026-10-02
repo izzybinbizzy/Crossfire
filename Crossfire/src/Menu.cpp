@@ -160,12 +160,17 @@ namespace Crossfire
 			Slider(e, "Overpower", "OverpowerRatio", c.overpowerRatio, "x%.1f", "A projectile this many times stronger than the other destroys it and flies on. Closer than that, both go.");
 			Slider(e, "Aim assist", "RadiusBonus", c.radiusBonus, "%.0f units", "Added to every projectile's size, so a shot does not have to be perfect. 0 is the game's own sizes.");
 			Check(e, "The survivor is weakened", c.weakenSurvivor, "The one that flies on loses the strength of what it beat.");
+			layout.Beside();
+			Check(e, "Bolts meet", c.boltsMeet, "Two lightning bolts (any one-shot bolt) that cross burst between the casters and both go. A fired bolt still counts for a moment after it fades, so they need not be cast in the same instant.");
 
 			Heading("Effects");
 			Check(e, "Bursts", c.explosions, "A destroyed projectile bursts where it was hit, with its own explosion.");
 			layout.Beside();
 			ImGuiMCP::BeginDisabled(!c.explosions);
 			Check(e, "Only harmless bursts", c.safeExplosionsOnly, "Skip a burst that would do more than show: damage, an enchantment, something it spawns. Spells' own explosions only show.");
+			Check(e, "Stand-in bursts", c.standInBursts,
+				"A spell with no explosion of its own (Firebolt, Ice Spike, Lightning Bolt) bursts the way its element's spells do, so every clash shows.");
+			Slider(e, "Burst size", "BurstScale", c.burstScale, "x%.1f", "How big a clash's burst is.");
 			ImGuiMCP::EndDisabled();
 			Slider(e, "Skill experience", "SkillXP", c.skillXP, "%.0f", "For each enemy projectile one of yours destroys, to the skill that cast it (Archery for arrows). 0: none.");
 
@@ -191,6 +196,11 @@ namespace Crossfire
 			}
 			ImGuiMCP::TextDisabled("%s", "Finer tuning (range, sizes, strengths, burst limits) lives in Crossfire.ini.");
 		}
+
+		// when "Preview the bar" was pressed (ImGui time, render thread only); the bar shows a made-up struggle for kPreview seconds
+		double            gPreviewFrom = -100.0;
+		constexpr double  kPreview = 8.0;
+		std::atomic<bool> gPreviewAsked{ false };  // DevBench's way in (another thread): taken on the next frame
 
 		// an element's colour, for the struggle bar
 		[[nodiscard]] ImGuiMCP::ImVec4 ElementColour(std::uint8_t a_element, float a_alpha)
@@ -254,12 +264,19 @@ namespace Crossfire
 				"An extra hit on the overwhelmed caster, about two seconds of the winning stream, less their resistance. 0: only the stream's own damage.");
 
 			Heading("Show");
-			Check(e, "Struggle bar", s.bar, "While you are locked, a bar shows who is pushing, in each spell's colour, with both magic skills.");
+			Check(e, "Struggle bar", s.bar, "While you are locked, a bar shows who is pushing, in each spell's colour, with each spell's sigil.");
 			layout.Beside();
 			Check(e, "Messages", s.messages, "A message when you overwhelm someone, they overwhelm you, they give way, or the spells burst between you.");
 			ImGuiMCP::BeginDisabled(!s.bar);
+			Check(e, "Show names", s.barNames, "Your name and theirs over the bar.");
+			layout.Beside();
+			Check(e, "Show skill numbers", s.barSkills, "Both magic skills under the bar.");
 			Slider(e, "Bar position", "BarHeight", s.barHeight, "%.0f%%", "How far down the screen the bar sits.");
 			Slider(e, "Bar size", "BarScale", s.barScale, "x%.2f", "How big the bar is.");
+			if (ImGuiMCP::Button("Preview the bar")) {
+				gPreviewFrom = ImGuiMCP::GetTime();
+			}
+			ImGuiMCP::SetItemTooltip("%s", "Shows the bar for a few seconds, as a struggle of fire against frost, so you can see its place and size.");
 			ImGuiMCP::EndDisabled();
 
 			ImGuiMCP::EndDisabled();
@@ -285,12 +302,77 @@ namespace Crossfire
 			ImGuiMCP::TextDisabled("%s", "Finer tuning (skill, level and spell weights, magicka, surges, reeling, camera shake) lives in Crossfire.ini.");
 		}
 
+		// a spell's sigil for the struggle bar: a ring in the element's colour with its mark inside
+		void DrawSigil(ImGuiMCP::ImDrawList* a_dl, ImGuiMCP::ImVec2 a_c, float a_r, std::uint8_t a_element, float a_alpha)
+		{
+			using namespace ImGuiMCP;
+			const ImU32 c = ColorConvertFloat4ToU32(ElementColour(a_element, a_alpha));
+			const ImU32 back = ColorConvertFloat4ToU32(ImVec4{ 0.0f, 0.0f, 0.0f, 0.55f * a_alpha });
+			const float t = std::max(1.0f, a_r * 0.16f);
+			const auto  at = [&](float x, float y) { return ImVec2{ a_c.x + x * a_r, a_c.y + y * a_r }; };
+			ImDrawListManager::AddCircleFilled(a_dl, a_c, a_r, back, 32);
+			ImDrawListManager::AddCircle(a_dl, a_c, a_r, c, 32, t);
+			switch (static_cast<Core::Element>(a_element)) {
+			case Core::Element::kFire:  // a flame: a tongue rising off a round base
+				ImDrawListManager::AddCircleFilled(a_dl, at(0.0f, 0.22f), a_r * 0.3f, c, 16);
+				ImDrawListManager::AddTriangleFilled(a_dl, at(-0.3f, 0.18f), at(0.08f, -0.62f), at(0.3f, 0.18f), c);
+				break;
+			case Core::Element::kFrost:  // a snowflake: three crossed strokes
+				for (int i = 0; i < 3; ++i) {
+					const float ang = 1.5708f + i * 1.0472f;
+					ImDrawListManager::AddLine(a_dl, at(std::cos(ang) * 0.6f, -std::sin(ang) * 0.6f), at(-std::cos(ang) * 0.6f, std::sin(ang) * 0.6f), c, t);
+				}
+				break;
+			case Core::Element::kShock: {  // a bolt
+				const ImVec2 bolt[]{ at(0.15f, -0.62f), at(-0.25f, 0.05f), at(0.08f, 0.05f), at(-0.15f, 0.62f) };
+				ImDrawListManager::AddPolyline(a_dl, bolt, 4, c, 0, t * 1.2f);
+				break;
+			}
+			case Core::Element::kPoison:  // a drop
+				ImDrawListManager::AddCircleFilled(a_dl, at(0.0f, 0.2f), a_r * 0.32f, c, 16);
+				ImDrawListManager::AddTriangleFilled(a_dl, at(-0.3f, 0.12f), at(0.0f, -0.58f), at(0.3f, 0.12f), c);
+				break;
+			case Core::Element::kForce:  // a ring inside the ring
+				ImDrawListManager::AddCircle(a_dl, a_c, a_r * 0.45f, c, 24, t);
+				ImDrawListManager::AddCircleFilled(a_dl, a_c, a_r * 0.15f, c, 12);
+				break;
+			case Core::Element::kPhysical:  // a blade's point
+				ImDrawListManager::AddQuadFilled(a_dl, at(0.0f, -0.6f), at(0.22f, 0.0f), at(0.0f, 0.6f), at(-0.22f, 0.0f), c);
+				break;
+			default:  // anything else: a four-point star
+				ImDrawListManager::AddQuadFilled(a_dl, at(0.0f, -0.6f), at(0.14f, 0.0f), at(0.0f, 0.6f), at(-0.14f, 0.0f), c);
+				ImDrawListManager::AddQuadFilled(a_dl, at(-0.6f, 0.0f), at(0.0f, 0.14f), at(0.6f, 0.0f), at(0.0f, -0.14f), c);
+				break;
+			}
+		}
+
 		// the struggle bar, on the render thread: it reads only StruggleNow()
 		void __stdcall DrawStruggleBar()
 		{
 			using namespace ImGuiMCP;
 			static float alpha = 0.0f;
-			const auto   v = StruggleNow();
+			if (gPreviewAsked.exchange(false)) {
+				gPreviewFrom = GetTime();
+			}
+			auto         v = StruggleNow();
+			if (const double t = GetTime() - gPreviewFrom; !v.active && t >= 0.0 && t < kPreview) {
+				const auto cfg = MenuCopy().struggle;
+				v.active = true;
+				v.bar = cfg.bar;
+				v.barHeight = cfg.barHeight;
+				v.barScale = cfg.barScale;
+				v.barOpacity = cfg.barOpacity;
+				v.barNames = cfg.barNames;
+				v.barSkills = cfg.barSkills;
+				v.balance = 0.45f * static_cast<float>(std::sin(t * 1.3));
+				v.mine = static_cast<std::uint8_t>(Core::Element::kFire);
+				v.theirs = static_cast<std::uint8_t>(Core::Element::kFrost);
+				v.mySkill = 82;
+				v.theirSkill = 64;
+				std::snprintf(v.school, sizeof(v.school), "%s", "Destruction");
+				std::snprintf(v.theirSchool, sizeof(v.theirSchool), "%s", "Destruction");
+				std::snprintf(v.foe, sizeof(v.foe), "%s", "Bandit Mage");
+			}
 			auto*        io = GetIO();
 			if (!io) {
 				return;
@@ -306,25 +388,80 @@ namespace Crossfire
 			}
 			const float k = std::clamp(v.barScale, 0.5f, 2.0f);
 			const float a = std::clamp(v.barOpacity, 0.1f, 1.0f) * alpha;
-			const float w = 360.0f * k, h = 10.0f * k;
-			const float cx = io->DisplaySize.x * 0.5f, y = io->DisplaySize.y * std::clamp(v.barHeight, 0.0f, 100.0f) / 100.0f;
+			const float w = 420.0f * k, h = 6.0f * k;
+			const float cx = io->DisplaySize.x * 0.5f, yc = io->DisplaySize.y * std::clamp(v.barHeight, 0.0f, 100.0f) / 100.0f;
 			const float x0 = cx - w * 0.5f, x1 = cx + w * 0.5f;
 			const float split = x0 + w * std::clamp((1.0f + v.balance) * 0.5f, 0.0f, 1.0f);
-			ImDrawListManager::AddRectFilled(dl, ImVec2{ x0 - 2.0f, y - 2.0f }, ImVec2{ x1 + 2.0f, y + h + 2.0f },
-				ColorConvertFloat4ToU32(ImVec4{ 0.05f, 0.04f, 0.03f, 0.8f * a }), 3.0f, 0);
-			ImDrawListManager::AddRectFilled(dl, ImVec2{ x0, y }, ImVec2{ split, y + h }, ColorConvertFloat4ToU32(ElementColour(v.mine, a)), 2.0f, 0);
-			ImDrawListManager::AddRectFilled(dl, ImVec2{ split, y }, ImVec2{ x1, y + h }, ColorConvertFloat4ToU32(ElementColour(v.theirs, a)), 2.0f, 0);
-			ImDrawListManager::AddLine(dl, ImVec2{ split, y - 4.0f * k }, ImVec2{ split, y + h + 4.0f * k },
-				ColorConvertFloat4ToU32(ImVec4{ 1.0f, 0.97f, 0.85f, a }), 2.0f * k);
-			char left[64], right[96];
-			std::snprintf(left, sizeof(left), "You - %s %d", v.school, v.mySkill);
-			std::snprintf(right, sizeof(right), "%s - %d", v.foe, v.theirSkill);
-			const ImU32 text = ColorConvertFloat4ToU32(ImVec4{ 1.0f, 0.94f, 0.8f, a });
-			const auto  rs = CalcTextSize(right);
-			ImDrawListManager::AddText(dl, ImVec2{ x0, y - 18.0f * k }, text, left);
-			ImDrawListManager::AddText(dl, ImVec2{ x1 - rs.x, y - 18.0f * k }, text, right);
+			const auto  col = [a](float r, float g, float b, float o) { return ColorConvertFloat4ToU32(ImVec4{ r, g, b, o * a }); };
+			const auto  elem = [a](std::uint8_t e, float o) { return ColorConvertFloat4ToU32(ElementColour(e, o * a)); };
+			const ImU32 bone = col(0.86f, 0.82f, 0.73f, 0.9f);
+
+			// the track: the game's meter, a dark slot with a faint bone edge
+			ImDrawListManager::AddRectFilled(dl, ImVec2{ x0, yc - h * 0.5f - 1.0f }, ImVec2{ x1, yc + h * 0.5f + 1.0f }, col(0.0f, 0.0f, 0.0f, 0.6f), 0.0f, 0);
+			ImDrawListManager::AddRect(dl, ImVec2{ x0, yc - h * 0.5f - 1.0f }, ImVec2{ x1, yc + h * 0.5f + 1.0f }, col(0.78f, 0.75f, 0.65f, 0.45f), 0.0f, 0, 1.0f);
+			// each side's spell, faint at its own end and brightest where they meet
+			ImDrawListManager::AddRectFilledMultiColor(dl, ImVec2{ x0, yc - h * 0.5f }, ImVec2{ split, yc + h * 0.5f },
+				elem(v.mine, 0.4f), elem(v.mine, 1.0f), elem(v.mine, 1.0f), elem(v.mine, 0.4f));
+			ImDrawListManager::AddRectFilledMultiColor(dl, ImVec2{ split, yc - h * 0.5f }, ImVec2{ x1, yc + h * 0.5f },
+				elem(v.theirs, 1.0f), elem(v.theirs, 0.4f), elem(v.theirs, 0.4f), elem(v.theirs, 1.0f));
+			// the bracket ends: a tick and a small outward chevron, as on the health and magicka meters
+			for (const auto [x, s] : { std::pair{ x0, 1.0f }, std::pair{ x1, -1.0f } }) {
+				ImDrawListManager::AddLine(dl, ImVec2{ x, yc - h * 1.6f }, ImVec2{ x, yc + h * 1.6f }, bone, std::max(1.0f, k));
+				ImDrawListManager::AddTriangleFilled(dl, ImVec2{ x - s * 10.0f * k, yc }, ImVec2{ x - s * 3.0f * k, yc - h * 0.9f },
+					ImVec2{ x - s * 3.0f * k, yc + h * 0.9f }, bone);
+			}
+			// the glow where the spells meet: soft rings, widest first, breathing a little
+			const float pulse = 0.85f + 0.15f * static_cast<float>(std::sin(GetTime() * 4.0));
+			for (int i = 0; i < 8; ++i) {
+				const float r = (26.0f - i * 2.8f) * k * pulse;
+				ImDrawListManager::AddCircleFilled(dl, ImVec2{ split, yc }, r, col(1.0f, 0.92f, 0.75f, 0.05f + i * 0.012f), 24);
+			}
+			// the meeting point: the compass's diamond
+			const float r = 7.0f * k;
+			ImDrawListManager::AddQuadFilled(dl, ImVec2{ split, yc - r }, ImVec2{ split + r, yc }, ImVec2{ split, yc + r }, ImVec2{ split - r, yc },
+				col(0.96f, 0.93f, 0.82f, 1.0f));
+			ImDrawListManager::AddQuad(dl, ImVec2{ split, yc - r }, ImVec2{ split + r, yc }, ImVec2{ split, yc + r }, ImVec2{ split - r, yc },
+				col(0.16f, 0.13f, 0.10f, 1.0f), 1.0f);
+			// each spell's sigil beyond its end
+			DrawSigil(dl, ImVec2{ x0 - 34.0f * k, yc }, 11.0f * k, v.mine, a);
+			DrawSigil(dl, ImVec2{ x1 + 34.0f * k, yc }, 11.0f * k, v.theirs, a);
+
+			// names over the bar and skills under it, each only when asked for; capitals, with a drop shadow
+			auto*       font = GetFont();
+			const float fs = GetFontSize();
+			const auto  label = [&](const char* t, float size, float y, bool right, ImU32 c) {
+				const float tw = CalcTextSize(t).x * size / fs;
+				const float x = right ? x1 - tw : x0;
+				ImDrawListManager::AddText(dl, font, size, ImVec2{ x + 1.0f, y + 1.0f }, col(0.0f, 0.0f, 0.0f, 0.8f), t);
+				ImDrawListManager::AddText(dl, font, size, ImVec2{ x, y }, c, t);
+			};
+			if (v.barNames) {
+				char foe[64];
+				std::snprintf(foe, sizeof(foe), "%s", v.foe);
+				for (auto& ch : foe) {
+					ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+				}
+				const float size = fs * 1.15f * k;
+				label("YOU", size, yc - h * 1.6f - size - 4.0f * k, false, col(0.91f, 0.88f, 0.80f, 1.0f));
+				label(foe, size, yc - h * 1.6f - size - 4.0f * k, true, col(0.91f, 0.88f, 0.80f, 1.0f));
+			}
+			if (v.barSkills) {
+				char mine[32], theirs[32];
+				std::snprintf(mine, sizeof(mine), "%s %d", v.school, v.mySkill);
+				std::snprintf(theirs, sizeof(theirs), "%s %d", v.theirSchool, v.theirSkill);
+				for (auto* t : { mine, theirs }) {
+					for (; *t; ++t) {
+						*t = static_cast<char>(std::toupper(static_cast<unsigned char>(*t)));
+					}
+				}
+				const float size = fs * 0.85f * k;
+				label(mine, size, yc + h * 1.6f + 3.0f * k, false, col(0.75f, 0.71f, 0.63f, 1.0f));
+				label(theirs, size, yc + h * 1.6f + 3.0f * k, true, col(0.75f, 0.71f, 0.63f, 1.0f));
+			}
 		}
 	}
+
+	void RequestBarPreview() { gPreviewAsked = true; }
 
 	void RegisterMenu()
 	{
