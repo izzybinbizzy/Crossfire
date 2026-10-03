@@ -107,6 +107,8 @@
   "Preview the bar": "Preview the bar",
   "Shows the bar for a few seconds, as a struggle of fire against frost, so you can see its place and size.": "Shows the bar for a few seconds, as a struggle of fire against frost, so you can see its place and size.",
   "Now": "Now",
+  "Locked": "Locked",
+  "Free": "Free",
   "Locked with %s: %s %d against %d, %.1f s, the lock %s": "Locked with %s: %s %d against %d, %.1f s, the lock %s",
   "moving toward them": "moving toward them",
   "moving toward you": "moving toward you",
